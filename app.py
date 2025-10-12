@@ -13,6 +13,7 @@ import pickle
 import os
 import logging
 from functools import lru_cache
+import plotly.graph_objects as go
 
 # Thiết lập logging
 logging.basicConfig(level=logging.INFO)
@@ -241,7 +242,7 @@ def expert_catboost_prob(_catboost_model, history, window=7):
 def init_meta_state():
     return {
         "names": ["markov", "freq", "wma", "sgd", "lgbm", "bayesian", "logistic", "nb", "catboost"],
-        "weights": np.array([0.15, 0.15, 0.15, 0.1, 0.1, 0.15, 0.1, 0.1, 0.1]),  # Giảm trọng số ban đầu cho lgbm, catboost
+        "weights": np.array([0.15, 0.15, 0.15, 0.1, 0.1, 0.15, 0.1, 0.1, 0.1]),
         "loss_history": deque(maxlen=200),
         "eta": 0.5,
         "decay": 0.999,
@@ -256,7 +257,7 @@ def init_rl_policy(_state_size=9, _n_experts=9):
 class RLPolicy:
     def __init__(self, state_size=9, n_experts=9):
         self.weights = np.array([0.15, 0.15, 0.15, 0.1, 0.1, 0.15, 0.1, 0.1, 0.1])
-        self.lr = 0.1  # Tăng learning rate để điều chỉnh nhanh hơn
+        self.lr = 0.1
         self.n_experts = n_experts
 
     def predict(self, state):
@@ -266,7 +267,7 @@ class RLPolicy:
     def update(self, state, reward, weights, losses, reasons, entropy_val):
         if reward < 0:
             max_loss_idx = np.argmax(losses)
-            self.weights[max_loss_idx] *= (1 - self.lr * (0.5 + 0.5 * entropy_val))  # Giảm mạnh hơn nếu entropy cao
+            self.weights[max_loss_idx] *= (1 - self.lr * (0.5 + 0.5 * entropy_val))
         self.weights = weights * (1 + self.lr * reward)
         return self.weights / self.weights.sum()
 
@@ -294,9 +295,8 @@ def log_loss(true_label, prob):
     return - (true_label * np.log(p) + (1 - true_label) * np.log(1 - p))
 
 def route_expert(probs, losses, risk_score, rep_score, entropy_val):
-    if entropy_val > 0.8 or risk_score > 0.7 or rep_score > 0.95:  # Tăng ngưỡng rep_score
-        # Ưu tiên expert đơn giản khi nhiễu cao
-        simple_experts = [0, 1, 2, 5]  # markov, freq, wma, bayesian
+    if entropy_val > 0.8 or risk_score > 0.7 or rep_score > 0.95:
+        simple_experts = [0, 1, 2, 5]
         simple_probs = [probs[i] for i in simple_experts]
         simple_losses = [losses[i] for i in simple_experts]
         weights = np.ones(len(simple_experts)) / len(simple_experts)
@@ -309,7 +309,7 @@ def route_expert(probs, losses, risk_score, rep_score, entropy_val):
 # ------------------------------
 # Combined predict
 # ----------------------
-def combined_predict(_session_state, history_tuple, window=7, label_smoothing_alpha=0.15, risk_threshold=0.55, skip_on_high_risk=True):
+def combined_predict(_session_state, history_tuple, window=7, label_smoothing_alpha=0.15, risk_threshold=0.6, skip_on_high_risk=True):
     logger.info("Bắt đầu dự đoán")
     s = _session_state
     history = list(history_tuple)
@@ -382,9 +382,9 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
     eta = adaptive_eta(base_eta, ent_norm, streak, t)
     weights = s["meta"].get("weights", np.array([0.15, 0.15, 0.15, 0.1, 0.1, 0.15, 0.1, 0.1, 0.1]))
     weights = weights / weights.sum() if weights.sum() > 0 else np.ones(9) / 9.0
-    if ent_val > 0.8:  # Giảm trọng số expert phức tạp khi nhiễu cao
-        weights[3:5] *= 0.5  # Giảm sgd, lgbm
-        weights[6:9] *= 0.5  # Giảm logistic, nb, catboost
+    if ent_val > 0.8:
+        weights[3:5] *= 0.5
+        weights[6:9] *= 0.5
         weights = weights / weights.sum()
     losses = [log_loss(1, p) for p in probs]
     final_prob_raw = route_expert(probs, losses, bias_level + ent_norm, rep_score, ent_val)
@@ -395,7 +395,7 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
     ac1 = autocorr(recent, lag=1)
     risk_score = ent_norm * (1 - abs(ac1)) * (0.5 + alt) * (1 + bias_level)
     hist_acc = np.mean(s["meta"]["historical_accuracy"]) if s["meta"]["historical_accuracy"] else 0.5
-    dynamic_threshold = risk_threshold * (0.7 + 0.3 * hist_acc) * (1.0 - 0.2 * ent_norm)  # Nhạy hơn với entropy
+    dynamic_threshold = risk_threshold * (0.7 + 0.3 * hist_acc) * (1.0 - 0.2 * ent_norm)
     if hist_acc == 0.5 and not s["meta"]["historical_accuracy"]:
         logger.warning(f"historical_accuracy rỗng, sử dụng hist_acc mặc định: {hist_acc}")
     skip = skip_on_high_risk and (risk_score > 0.7 or max(prob_smoothed, 1 - prob_smoothed) < dynamic_threshold or rep_score > 0.95)
@@ -441,7 +441,7 @@ def train_models(_sgd_model, _lgbm_model, _logistic_model, _nb_model, _catboost_
             _sgd_model = SGDClassifier(loss="log_loss", max_iter=500, tol=1e-3, random_state=42)
         _sgd_model.partial_fit(new_X, new_y, classes=[0, 1])
         if _lgbm_model is None:
-            _lgbm_model = LGBMClassifier(n_estimators=15, reg_alpha=0.5, reg_lambda=0.5, random_state=42)  # Tăng regularisation
+            _lgbm_model = LGBMClassifier(n_estimators=15, reg_alpha=0.5, reg_lambda=0.5, random_state=42)
         _lgbm_model.fit(new_X, new_y)
         if _logistic_model is None:
             _logistic_model = LogisticRegression(max_iter=100, random_state=42)
@@ -450,7 +450,7 @@ def train_models(_sgd_model, _lgbm_model, _logistic_model, _nb_model, _catboost_
             _nb_model = GaussianNB()
         _nb_model.fit(new_X, new_y)
         if _catboost_model is None:
-            _catboost_model = CatBoostClassifier(iterations=20, depth=3, learning_rate=0.15, l2_leaf_reg=5, random_state=42, verbose=False)  # Tăng regularisation
+            _catboost_model = CatBoostClassifier(iterations=20, depth=3, learning_rate=0.15, l2_leaf_reg=5, random_state=42, verbose=False)
         _catboost_model.fit(new_X, new_y)
     logger.info("Hoàn thành huấn luyện mô hình")
     return _sgd_model, _lgbm_model, _logistic_model, _nb_model, _catboost_model
@@ -491,8 +491,8 @@ if "last_trained" not in st.session_state:
 st.sidebar.header("Settings")
 window = st.sidebar.number_input("Window size (features)", min_value=3, max_value=10, value=st.session_state.window)
 st.session_state.window = window
-label_smoothing_alpha = st.sidebar.slider("Label smoothing α", 0.0, 0.3, 0.15, 0.01)  # Tăng mặc định để tránh dự đoán cực trị
-confidence_threshold = st.sidebar.slider("Base Confidence threshold", 0.5, 0.9, 0.6, 0.01)  # Tăng mặc định để nghiêm ngặt hơn
+label_smoothing_alpha = st.sidebar.slider("Label smoothing α", 0.0, 0.3, 0.15, 0.01)
+confidence_threshold = st.sidebar.slider("Base Confidence threshold", 0.5, 0.9, 0.6, 0.01)
 risk_skip_enabled = st.sidebar.checkbox("Skip predictions when risk high", value=True)
 base_eta = st.sidebar.slider("Base eta (Hedge)", 0.01, 1.0, st.session_state.meta.get("eta", 0.5), 0.01)
 st.session_state.meta["eta"] = base_eta
@@ -649,47 +649,19 @@ with st.expander("5 — Biểu Đồ Hiệu Suất"):
         accuracies = list(st.session_state.meta["historical_accuracy"])
         rounds = list(range(1, len(accuracies) + 1))
         thresholds = [x.get('dynamic_threshold', confidence_threshold) for x in st.session_state.meta_steps[-len(accuracies):]] if st.session_state.meta_steps else [confidence_threshold] * len(accuracies)
-        ```chartjs
-        {
-            "type": "line",
-            "data": {
-                "labels": rounds,
-                "datasets": [
-                    {
-                        "label": "Độ chính xác mỗi ván",
-                        "data": accuracies,
-                        "borderColor": "#36A2EB",
-                        "backgroundColor": "rgba(54, 162, 235, 0.2)",
-                        "fill": false,
-                        "tension": 0.4
-                    },
-                    {
-                        "label": "Dynamic Threshold",
-                        "data": thresholds,
-                        "borderColor": "#FF6384",
-                        "backgroundColor": "rgba(255, 99, 132, 0.2)",
-                        "fill": false,
-                        "tension": 0.4
-                    }
-                ]
-            },
-            "options": {
-                "responsive": true,
-                "scales": {
-                    "y": {
-                        "beginAtZero": true,
-                        "max": 1,
-                        "title": { "display": true, "text": "Giá trị" }
-                    },
-                    "x": { "title": { "display": true, "text": "Ván" } }
-                },
-                "plugins": {
-                    "legend": { "display": true },
-                    "title": { "display": true, "text": "Hiệu suất và Dynamic Threshold qua các ván" }
-                }
-            }
-        }
-        ```
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=rounds, y=accuracies, mode='lines+markers', name='Độ chính xác mỗi ván', line=dict(color='#36A2EB')))
+        fig.add_trace(go.Scatter(x=rounds, y=thresholds, mode='lines+markers', name='Dynamic Threshold', line=dict(color='#FF6384')))
+        fig.update_layout(
+            title="Hiệu suất và Dynamic Threshold qua các ván",
+            xaxis_title="Ván",
+            yaxis_title="Giá trị",
+            yaxis=dict(range=[0, 1]),
+            template="plotly_white",
+            showlegend=True
+        )
+        st.plotly_chart(fig, use_container_width=True)
     else:
         st.write("Chưa có dữ liệu để vẽ biểu đồ. Vui lòng nhập thêm ván.")
 
@@ -702,7 +674,7 @@ if st.sidebar.button("Train Models Now"):
         with st.spinner("Đang huấn luyện mô hình..."):
             st.session_state.sgd_model, st.session_state.lgbm_model, st.session_state.logistic_model, st.session_state.nb_model, st.session_state.catboost_model = train_models(
                 st.session_state.get("sgd_model"), st.session_state.get("lgbm_model"),
-                st.session_state.get("logistic_model"), st.session_state.get_reload_data("nb_model"),
+                st.session_state.get("logistic_model"), st.session_state.get("nb_model"),
                 st.session_state.get("catboost_model"), st.session_state.history, window
             )
             st.session_state.last_trained = len(st.session_state.history)
