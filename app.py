@@ -602,8 +602,13 @@ else:
 # Experts & Weights
 with st.expander("3 — Experts & Weights"):
     names = st.session_state.meta.get("names", ["markov", "freq", "wma", "sgd", "lgbm", "bayesian", "logistic", "nb", "catboost"])
-    expert_probs = pred_info.get("expert_probs", [0.5] * len(names))
-    weights = pred_info.get("weights", [1/len(names)] * len(names))
+    # Kiểm tra pred_info tồn tại
+    if 'pred_info' not in locals() or pred_info is None:
+        expert_probs = [0.5] * len(names)
+        weights = [1/len(names)] * len(names)
+    else:
+        expert_probs = pred_info.get("expert_probs", [0.5] * len(names))
+        weights = pred_info.get("weights", [1/len(names)] * len(names))
     num_cols = min(len(names), 9)
     cols = st.columns(num_cols)
     for i, name in enumerate(names):
@@ -617,7 +622,6 @@ with st.expander("3 — Experts & Weights"):
             wcols[i % num_cols].metric(name, f"{weights[i]:.3f}" if weights[i] is not None else "N/A")
         else:
             wcols[i % num_cols].metric(name, "N/A")
-
 # Micro-patterns & Bias
 with st.expander("4 — Micro-patterns & Bias (recent window)"):
     recent = [1 if x == "Tài" else 0 for x in st.session_state.history[-window:]] if st.session_state.history else []
