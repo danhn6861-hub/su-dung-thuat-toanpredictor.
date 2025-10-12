@@ -241,7 +241,7 @@ def expert_catboost_prob(_catboost_model, history, window=7):
 def init_meta_state():
     return {
         "names": ["markov", "freq", "wma", "sgd", "lgbm", "bayesian", "logistic", "nb", "catboost"],
-        "weights": np.array([0.1, 0.1, 0.1, 0.1, 0.15, 0.15, 0.1, 0.1, 0.2]),
+        "weights": np.array([0.15, 0.15, 0.15, 0.1, 0.1, 0.15, 0.1, 0.1, 0.1]),  # Giảm trọng số ban đầu cho lgbm, catboost
         "loss_history": deque(maxlen=200),
         "eta": 0.5,
         "decay": 0.999,
@@ -255,18 +255,18 @@ def init_rl_policy(_state_size=9, _n_experts=9):
 
 class RLPolicy:
     def __init__(self, state_size=9, n_experts=9):
-        self.weights = np.array([0.1, 0.1, 0.1, 0.1, 0.15, 0.15, 0.1, 0.1, 0.2])
-        self.lr = 0.05
+        self.weights = np.array([0.15, 0.15, 0.15, 0.1, 0.1, 0.15, 0.1, 0.1, 0.1])
+        self.lr = 0.1  # Tăng learning rate để điều chỉnh nhanh hơn
         self.n_experts = n_experts
 
     def predict(self, state):
         weights = self.weights + np.random.normal(0, 0.02, len(self.weights))
         return weights / weights.sum()
 
-    def update(self, state, reward, weights, losses, reasons):
+    def update(self, state, reward, weights, losses, reasons, entropy_val):
         if reward < 0:
             max_loss_idx = np.argmax(losses)
-            self.weights[max_loss_idx] *= (1 - self.lr * 0.5)
+            self.weights[max_loss_idx] *= (1 - self.lr * (0.5 + 0.5 * entropy_val))  # Giảm mạnh hơn nếu entropy cao
         self.weights = weights * (1 + self.lr * reward)
         return self.weights / self.weights.sum()
 
@@ -293,9 +293,14 @@ def log_loss(true_label, prob):
     p = np.clip(prob, eps, 1 - eps)
     return - (true_label * np.log(p) + (1 - true_label) * np.log(1 - p))
 
-def route_expert(probs, losses, risk_score, rep_score):
-    if risk_score > 0.7 or rep_score > 0.9:
-        return probs[np.argmin(losses)]
+def route_expert(probs, losses, risk_score, rep_score, entropy_val):
+    if entropy_val > 0.8 or risk_score > 0.7 or rep_score > 0.95:  # Tăng ngưỡng rep_score
+        # Ưu tiên expert đơn giản khi nhiễu cao
+        simple_experts = [0, 1, 2, 5]  # markov, freq, wma, bayesian
+        simple_probs = [probs[i] for i in simple_experts]
+        simple_losses = [losses[i] for i in simple_experts]
+        weights = np.ones(len(simple_experts)) / len(simple_experts)
+        return np.dot(simple_probs, weights)
     inv_losses = 1 / (np.array(losses) + 1e-8)
     weights = inv_losses / inv_losses.sum()
     weights = np.clip(weights, 0.05, None)
@@ -304,7 +309,7 @@ def route_expert(probs, losses, risk_score, rep_score):
 # ------------------------------
 # Combined predict
 # ----------------------
-def combined_predict(_session_state, history_tuple, window=7, label_smoothing_alpha=0.1, risk_threshold=0.55, skip_on_high_risk=True):
+def combined_predict(_session_state, history_tuple, window=7, label_smoothing_alpha=0.15, risk_threshold=0.55, skip_on_high_risk=True):
     logger.info("Bắt đầu dự đoán")
     s = _session_state
     history = list(history_tuple)
@@ -375,10 +380,14 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
     base_eta = s["meta"].get("eta", 0.5)
     t = len(s.get("meta_steps", [])) or 1
     eta = adaptive_eta(base_eta, ent_norm, streak, t)
-    weights = s["meta"].get("weights", np.array([0.1, 0.1, 0.1, 0.1, 0.15, 0.15, 0.1, 0.1, 0.2]))
+    weights = s["meta"].get("weights", np.array([0.15, 0.15, 0.15, 0.1, 0.1, 0.15, 0.1, 0.1, 0.1]))
     weights = weights / weights.sum() if weights.sum() > 0 else np.ones(9) / 9.0
+    if ent_val > 0.8:  # Giảm trọng số expert phức tạp khi nhiễu cao
+        weights[3:5] *= 0.5  # Giảm sgd, lgbm
+        weights[6:9] *= 0.5  # Giảm logistic, nb, catboost
+        weights = weights / weights.sum()
     losses = [log_loss(1, p) for p in probs]
-    final_prob_raw = route_expert(probs, losses, bias_level + ent_norm, rep_score) if bias_level > 0.3 or rep_score > 0.9 else np.dot(weights, probs)
+    final_prob_raw = route_expert(probs, losses, bias_level + ent_norm, rep_score, ent_val)
     final_prob_raw = np.clip(final_prob_raw + adjustment, 0.0, 1.0)
     prob_smoothed = label_smoothing_alpha + (1 - 2 * label_smoothing_alpha) * final_prob_raw
     prob_smoothed = np.clip(prob_smoothed, 0.0, 1.0)
@@ -386,10 +395,10 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
     ac1 = autocorr(recent, lag=1)
     risk_score = ent_norm * (1 - abs(ac1)) * (0.5 + alt) * (1 + bias_level)
     hist_acc = np.mean(s["meta"]["historical_accuracy"]) if s["meta"]["historical_accuracy"] else 0.5
-    dynamic_threshold = risk_threshold * (0.8 + 0.2 * hist_acc)  # Điều chỉnh để nhạy hơn với hist_acc
+    dynamic_threshold = risk_threshold * (0.7 + 0.3 * hist_acc) * (1.0 - 0.2 * ent_norm)  # Nhạy hơn với entropy
     if hist_acc == 0.5 and not s["meta"]["historical_accuracy"]:
         logger.warning(f"historical_accuracy rỗng, sử dụng hist_acc mặc định: {hist_acc}")
-    skip = skip_on_high_risk and (risk_score > 0.7 or max(prob_smoothed, 1 - prob_smoothed) < dynamic_threshold or rep_score > 0.9)
+    skip = skip_on_high_risk and (risk_score > 0.7 or max(prob_smoothed, 1 - prob_smoothed) < dynamic_threshold or rep_score > 0.95)
     result = {
         "prob": prob_smoothed,
         "raw_prob": final_prob_raw,
@@ -411,7 +420,7 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
         "dynamic_threshold": dynamic_threshold,
         "hist_acc": hist_acc
     }
-    logger.info(f"Hoàn thành dự đoán: dynamic_threshold={dynamic_threshold:.3f}, hist_acc={hist_acc:.3f}")
+    logger.info(f"Hoàn thành dự đoán: dynamic_threshold={dynamic_threshold:.3f}, hist_acc={hist_acc:.3f}, entropy={ent_val:.3f}")
     return result
 
 # ------------------------------
@@ -432,7 +441,7 @@ def train_models(_sgd_model, _lgbm_model, _logistic_model, _nb_model, _catboost_
             _sgd_model = SGDClassifier(loss="log_loss", max_iter=500, tol=1e-3, random_state=42)
         _sgd_model.partial_fit(new_X, new_y, classes=[0, 1])
         if _lgbm_model is None:
-            _lgbm_model = LGBMClassifier(n_estimators=20, reg_alpha=0.1, reg_lambda=0.1, random_state=42)
+            _lgbm_model = LGBMClassifier(n_estimators=15, reg_alpha=0.5, reg_lambda=0.5, random_state=42)  # Tăng regularisation
         _lgbm_model.fit(new_X, new_y)
         if _logistic_model is None:
             _logistic_model = LogisticRegression(max_iter=100, random_state=42)
@@ -441,7 +450,7 @@ def train_models(_sgd_model, _lgbm_model, _logistic_model, _nb_model, _catboost_
             _nb_model = GaussianNB()
         _nb_model.fit(new_X, new_y)
         if _catboost_model is None:
-            _catboost_model = CatBoostClassifier(iterations=30, depth=3, learning_rate=0.15, l2_leaf_reg=3, random_state=42, verbose=False)
+            _catboost_model = CatBoostClassifier(iterations=20, depth=3, learning_rate=0.15, l2_leaf_reg=5, random_state=42, verbose=False)  # Tăng regularisation
         _catboost_model.fit(new_X, new_y)
     logger.info("Hoàn thành huấn luyện mô hình")
     return _sgd_model, _lgbm_model, _logistic_model, _nb_model, _catboost_model
@@ -449,8 +458,8 @@ def train_models(_sgd_model, _lgbm_model, _logistic_model, _nb_model, _catboost_
 # ------------------------------
 # Streamlit UI
 # ----------------------
-st.set_page_config(page_title="AI Meta-Ensemble v6 — T/X Predictor", layout="wide")
-st.title("🧠 AI Meta-Ensemble v6 — Real-time T/X Predictor")
+st.set_page_config(page_title="AI Meta-Ensemble v7 — T/X Predictor", layout="wide")
+st.title("🧠 AI Meta-Ensemble v7 — Real-time T/X Predictor")
 
 # Khởi tạo session_state
 if "history" not in st.session_state:
@@ -482,8 +491,8 @@ if "last_trained" not in st.session_state:
 st.sidebar.header("Settings")
 window = st.sidebar.number_input("Window size (features)", min_value=3, max_value=10, value=st.session_state.window)
 st.session_state.window = window
-label_smoothing_alpha = st.sidebar.slider("Label smoothing α", 0.0, 0.3, 0.1, 0.01)
-confidence_threshold = st.sidebar.slider("Base Confidence threshold", 0.5, 0.9, 0.55, 0.01)
+label_smoothing_alpha = st.sidebar.slider("Label smoothing α", 0.0, 0.3, 0.15, 0.01)  # Tăng mặc định để tránh dự đoán cực trị
+confidence_threshold = st.sidebar.slider("Base Confidence threshold", 0.5, 0.9, 0.6, 0.01)  # Tăng mặc định để nghiêm ngặt hơn
 risk_skip_enabled = st.sidebar.checkbox("Skip predictions when risk high", value=True)
 base_eta = st.sidebar.slider("Base eta (Hedge)", 0.01, 1.0, st.session_state.meta.get("eta", 0.5), 0.01)
 st.session_state.meta["eta"] = base_eta
@@ -634,6 +643,56 @@ with st.expander("4 — Micro-patterns & Bias (recent window)"):
     else:
         st.write("Chưa đủ dữ liệu hoặc không thể tính micro-patterns. Vui lòng nhập thêm ván.")
 
+# Biểu đồ hiệu suất
+with st.expander("5 — Biểu Đồ Hiệu Suất"):
+    if st.session_state.meta["historical_accuracy"]:
+        accuracies = list(st.session_state.meta["historical_accuracy"])
+        rounds = list(range(1, len(accuracies) + 1))
+        thresholds = [x.get('dynamic_threshold', confidence_threshold) for x in st.session_state.meta_steps[-len(accuracies):]] if st.session_state.meta_steps else [confidence_threshold] * len(accuracies)
+        ```chartjs
+        {
+            "type": "line",
+            "data": {
+                "labels": rounds,
+                "datasets": [
+                    {
+                        "label": "Độ chính xác mỗi ván",
+                        "data": accuracies,
+                        "borderColor": "#36A2EB",
+                        "backgroundColor": "rgba(54, 162, 235, 0.2)",
+                        "fill": false,
+                        "tension": 0.4
+                    },
+                    {
+                        "label": "Dynamic Threshold",
+                        "data": thresholds,
+                        "borderColor": "#FF6384",
+                        "backgroundColor": "rgba(255, 99, 132, 0.2)",
+                        "fill": false,
+                        "tension": 0.4
+                    }
+                ]
+            },
+            "options": {
+                "responsive": true,
+                "scales": {
+                    "y": {
+                        "beginAtZero": true,
+                        "max": 1,
+                        "title": { "display": true, "text": "Giá trị" }
+                    },
+                    "x": { "title": { "display": true, "text": "Ván" } }
+                },
+                "plugins": {
+                    "legend": { "display": true },
+                    "title": { "display": true, "text": "Hiệu suất và Dynamic Threshold qua các ván" }
+                }
+            }
+        }
+        ```
+    else:
+        st.write("Chưa có dữ liệu để vẽ biểu đồ. Vui lòng nhập thêm ván.")
+
 # Huấn luyện mô hình
 st.sidebar.header("Training")
 if st.sidebar.button("Train Models Now"):
@@ -643,14 +702,14 @@ if st.sidebar.button("Train Models Now"):
         with st.spinner("Đang huấn luyện mô hình..."):
             st.session_state.sgd_model, st.session_state.lgbm_model, st.session_state.logistic_model, st.session_state.nb_model, st.session_state.catboost_model = train_models(
                 st.session_state.get("sgd_model"), st.session_state.get("lgbm_model"),
-                st.session_state.get("logistic_model"), st.session_state.get("nb_model"),
+                st.session_state.get("logistic_model"), st.session_state.get_reload_data("nb_model"),
                 st.session_state.get("catboost_model"), st.session_state.history, window
             )
             st.session_state.last_trained = len(st.session_state.history)
             st.success("Huấn luyện hoàn tất!")
 
 # Cập nhật trọng số và kinh nghiệm
-if len(st.session_state.history) >= window + 1:  # Đảm bảo đủ dữ liệu để dự đoán
+if len(st.session_state.history) >= window + 1:
     idx = len(st.session_state.history) - 1
     history_before = st.session_state.history[:idx]
     true_label = 1 if st.session_state.history[idx] == "Tài" else 0
@@ -698,6 +757,9 @@ if len(st.session_state.history) >= window + 1:  # Đảm bảo đủ dữ liệ
         
         # Xác định lý do thắng/thua chi tiết
         reasons = []
+        prob_deviations = [abs(p - true_label) for p in probs_before]
+        worst_expert_idx = np.argmax(prob_deviations)
+        best_expert_idx = np.argmin(prob_deviations)
         if reward < 0:
             if ent_val > 0.8:
                 reasons.append(f"Entropy cao ({ent_val:.3f})")
@@ -705,20 +767,18 @@ if len(st.session_state.history) >= window + 1:  # Đảm bảo đủ dữ liệ
                 reasons.append(f"Streak dài ({streak})")
             if binom_dev > 0.1:
                 reasons.append(f"Bias mạnh (deviation {binom_dev:.3f})")
-            if rep_score > 0.9:
+            if rep_score > 0.95:
                 reasons.append(f"Dự đoán lặp lại (rep_score {rep_score:.3f})")
             if ensemble_cb.get('risk_score', 1.0) > 0.7:
                 reasons.append(f"Rủi ro cao (risk_score {ensemble_cb['risk_score']:.3f})")
             if not reasons:
                 reasons.append("Pattern không rõ ràng")
-            max_loss_idx = np.argmax(losses)
-            max_loss_expert = st.session_state.meta["names"][max_loss_idx]
-            reason_str = "; ".join(reasons) + f". Expert tệ nhất: {max_loss_expert} (loss {losses[max_loss_idx]:.3f})"
-            st.session_state.meta["experience_log"].append(f"Thua ván {idx + 1}: {reason_str}. Giảm trọng số {max_loss_expert}.")
+            worst_expert = st.session_state.meta["names"][worst_expert_idx]
+            reason_str = "; ".join(reasons) + f". Expert tệ nhất: {worst_expert} (deviation {prob_deviations[worst_expert_idx]:.3f})"
+            st.session_state.meta["experience_log"].append(f"Thua ván {idx + 1}: {reason_str}. Giảm trọng số {worst_expert}.")
         else:
-            min_loss_idx = np.argmin(losses)
-            min_loss_expert = st.session_state.meta["names"][min_loss_idx]
-            reasons.append(f"Pattern tốt, expert tốt nhất: {min_loss_expert} (loss {losses[min_loss_idx]:.3f})")
+            best_expert = st.session_state.meta["names"][best_expert_idx]
+            reasons.append(f"Pattern tốt, expert tốt nhất: {best_expert} (deviation {prob_deviations[best_expert_idx]:.3f})")
             if ent_val < 0.5:
                 reasons.append(f"Entropy thấp ({ent_val:.3f})")
             if streak <= 3:
@@ -730,7 +790,7 @@ if len(st.session_state.history) >= window + 1:  # Đảm bảo đủ dữ liệ
         
         # Cập nhật trọng số với RLPolicy
         state = [ent_val, streak, ensemble_cb.get('risk_score', 1.0), ensemble_cb.get('bias_level', 0.0), np.mean(losses), ac1, ac2, alt, rep_score]
-        new_w = rl_adjust_weights(st.session_state.rl_policy, state, reward, new_w, losses, reasons)
+        new_w = st.session_state.rl_policy.update(state, reward, new_w, losses, reasons, ent_val)
         st.session_state.meta["weights"] = new_w
         st.session_state.meta_steps.append({
             "losses": losses,
@@ -738,14 +798,15 @@ if len(st.session_state.history) >= window + 1:  # Đảm bảo đủ dữ liệ
             "old_w": old_w.tolist(),
             "new_w": new_w.tolist(),
             "reward": reward,
-            "reasons": reasons
+            "reasons": reasons,
+            "dynamic_threshold": ensemble_cb.get("dynamic_threshold", confidence_threshold)
         })
         logger.info(f"Cập nhật kinh nghiệm ván {idx + 1}: correct={correct}, reward={reward:.3f}, reasons={reason_str}")
     except Exception as e:
         logger.error(f"Lỗi trong cập nhật kinh nghiệm ván {idx + 1}: {e}")
 
 # Thống kê hiệu suất
-st.subheader("5 — Thống Kê Hiệu Suất")
+st.subheader("6 — Thống Kê Hiệu Suất")
 if st.session_state.meta["historical_accuracy"]:
     accuracy = np.mean(st.session_state.meta["historical_accuracy"])
     st.write(f"Độ chính xác (trên {len(st.session_state.meta['historical_accuracy'])} ván gần nhất): {accuracy:.2%}")
@@ -760,7 +821,7 @@ else:
     st.write("Chưa có dữ liệu hiệu suất. Vui lòng nhập thêm ván và huấn luyện mô hình.")
 
 # Kinh nghiệm thắng/thua
-with st.expander("6 — Kinh Nghiệm Thắng/Thua"):
+with st.expander("7 — Kinh Nghiệm Thắng/Thua"):
     if st.session_state.meta["experience_log"]:
         for log in st.session_state.meta["experience_log"][-10:]:
             st.write(log)
