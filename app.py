@@ -20,9 +20,7 @@ import streamlit as st
      from functools import lru_cache
      warnings.filterwarnings("ignore")
 
-     # ------------------------------
      # Utility helpers
-     # ------------------------------
      def safe_array(arr):
          return np.array(arr, dtype=float)
 
@@ -122,9 +120,7 @@ import streamlit as st
          deviation = abs(k / n - p)
          return result.pvalue, deviation
 
-     # ------------------------------
      # Feature engineering
-     # ------------------------------
      @lru_cache(maxsize=32)
      def create_features_cached(history_tuple, window):
          history = list(history_tuple)
@@ -169,9 +165,7 @@ import streamlit as st
              return np.empty((0, window + 18)), np.empty((0,))
          return np.array(X), np.array(y)
 
-     # ------------------------------
      # Experts
-     # ------------------------------
      def expert_markov_prob(history):
          if not history:
              return 0.5
@@ -320,9 +314,7 @@ import streamlit as st
              return 0.5
          return bagging_model.predict_proba([X_all[-1]])[0][1]
 
-     # ------------------------------
      # Meta-ensemble
-     # ------------------------------
      def init_meta_state():
          return {
              "names": ["markov", "freq", "wma", "sgd", "rf", "bayesian", "lgbm", "logistic", "nb", "knn", "dt", "et", "ada", "gb", "xgb", "svc", "perceptron", "pa", "bagging"],
@@ -379,9 +371,7 @@ import streamlit as st
          inv_losses = 1 / (np.array(losses) + 1e-8)
          return np.dot(probs, inv_losses / inv_losses.sum())
 
-     # ------------------------------
      # Combined predict
-     # ------------------------------
      def combined_predict(session_state, history, window=7, label_smoothing_alpha=0.1, risk_threshold=0.55, skip_on_high_risk=True):
          s = session_state
          recent = [1 if x == "Tài" else 0 for x in history[-window:]] if len(history) >= window else [1 if x == "Tài" else 0 for x in history]
@@ -466,9 +456,7 @@ import streamlit as st
              "dynamic_threshold": dynamic_threshold
          }
 
-     # ------------------------------
      # Streamlit UI
-     # ------------------------------
      st.set_page_config(page_title="AI Meta-Ensemble v5 — Enhanced with +20 ML Models", layout="wide")
      st.title("🧠 AI Meta-Ensemble v5 — Enhanced Real-time T/X Predictor with +20 ML Models, Bias Detection & Adaptive Learning")
 
@@ -673,4 +661,68 @@ import streamlit as st
                      new_X = Xb[-batch_size:]
                      new_y = yb[-batch_size:]
                      if st.session_state.sgd_model is None:
-                         st.session_state.sgd_model = SGDClassifier(loss="log_loss", max
+                         st.session_state.sgd_model = SGDClassifier(loss="log_loss", max_iter=1000, tol=1e-3, random_state=42)
+                     st.session_state.sgd_model.partial_fit(new_X, new_y, classes=[0, 1])
+                     if st.session_state.rf_model is None:
+                         st.session_state.rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+                     st.session_state.rf_model.fit(new_X, new_y)
+                     if st.session_state.lgbm_model is None:
+                         st.session_state.lgbm_model = LGBMClassifier(n_estimators=100, random_state=42)
+                     st.session_state.lgbm_model.fit(new_X, new_y)
+                     if st.session_state.logistic_model is None:
+                         st.session_state.logistic_model = LogisticRegression(max_iter=1000, random_state=42)
+                     st.session_state.logistic_model.fit(new_X, new_y)
+                     if st.session_state.nb_model is None:
+                         st.session_state.nb_model = GaussianNB()
+                     st.session_state.nb_model.fit(new_X, new_y)
+                     if st.session_state.knn_model is None:
+                         st.session_state.knn_model = KNeighborsClassifier(n_neighbors=5)
+                     st.session_state.knn_model.fit(new_X, new_y)
+                     if st.session_state.dt_model is None:
+                         st.session_state.dt_model = DecisionTreeClassifier(random_state=42)
+                     st.session_state.dt_model.fit(new_X, new_y)
+                     if st.session_state.et_model is None:
+                         st.session_state.et_model = ExtraTreesClassifier(n_estimators=100, random_state=42)
+                     st.session_state.et_model.fit(new_X, new_y)
+                     if st.session_state.ada_model is None:
+                         st.session_state.ada_model = AdaBoostClassifier(n_estimators=100, random_state=42)
+                     st.session_state.ada_model.fit(new_X, new_y)
+                     if st.session_state.gb_model is None:
+                         st.session_state.gb_model = GradientBoostingClassifier(n_estimators=100, random_state=42)
+                     st.session_state.gb_model.fit(new_X, new_y)
+                     if st.session_state.xgb_model is None:
+                         st.session_state.xgb_model = XGBClassifier(n_estimators=100, random_state=42, eval_metric='logloss')
+                     st.session_state.xgb_model.fit(new_X, new_y)
+                     if st.session_state.svc_model is None:
+                         svc = SVC(probability=True, random_state=42)
+                         st.session_state.svc_model = CalibratedClassifierCV(svc, method='sigmoid', cv=5)
+                     st.session_state.svc_model.fit(new_X, new_y)
+                     if st.session_state.perceptron_model is None:
+                         perceptron = Perceptron(max_iter=1000, tol=1e-3, random_state=42)
+                         st.session_state.perceptron_model = CalibratedClassifierCV(perceptron, method='sigmoid', cv=5)
+                     st.session_state.perceptron_model.fit(new_X, new_y)
+                     if st.session_state.pa_model is None:
+                         pa = PassiveAggressiveClassifier(max_iter=1000, tol=1e-3, random_state=42)
+                         st.session_state.pa_model = CalibratedClassifierCV(pa, method='sigmoid', cv=5)
+                     st.session_state.pa_model.fit(new_X, new_y)
+                     if st.session_state.bagging_model is None:
+                         st.session_state.bagging_model = BaggingClassifier(n_estimators=100, random_state=42)
+                     st.session_state.bagging_model.fit(new_X, new_y)
+
+     st.subheader("5 — Thống Kê Hiệu Suất")
+     if st.session_state.meta["historical_accuracy"]:
+         accuracy = np.mean(st.session_state.meta["historical_accuracy"])
+         st.write(f"Độ chính xác (trên {len(st.session_state.meta['historical_accuracy'])} ván gần nhất): {accuracy:.2%}")
+         recent_losses = [x['reward'] for x in st.session_state.meta_steps[-10:]]
+         if recent_losses:
+             avg_loss = np.mean([x for x in recent_losses if x < 0])
+             st.write(f"Loss trung bình (10 ván gần nhất): {avg_loss:.3f}")
+     else:
+         st.write("Chưa có dữ liệu hiệu suất.")
+
+     st.subheader("6 — Kinh Nghiệm Thắng/Thua")
+     if st.session_state.meta["experience_log"]:
+         for log in st.session_state.meta["experience_log"][-5:]:
+             st.write(log)
+     else:
+         st.write("Chưa có kinh nghiệm được ghi lại.")
