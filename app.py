@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
-from sklearn.linear_model import SGDClassifier, LogisticRegression, Perceptron, PassiveAggressiveClassifier
-from sklearn.ensemble import RandomForestClassifier, IsolationForest, ExtraTreesClassifier, AdaBoostClassifier, GradientBoostingClassifier, BaggingClassifier
+from sklearn.linear_model import SGDClassifier, LogisticRegression
+from sklearn.ensemble import RandomForestClassifier, IsolationForest, AdaBoostClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.naive_bayes import GaussianNB
@@ -20,7 +20,9 @@ import os
 from functools import lru_cache
 warnings.filterwarnings("ignore")
 
+# ------------------------------
 # Utility helpers
+# ------------------------------
 def safe_array(arr):
     return np.array(arr, dtype=float)
 
@@ -120,7 +122,9 @@ def binomial_bias_test(arr, p=0.5):
     deviation = abs(k / n - p)
     return result.pvalue, deviation
 
+# ------------------------------
 # Feature engineering
+# ------------------------------
 @lru_cache(maxsize=32)
 def create_features_cached(history_tuple, window):
     history = list(history_tuple)
@@ -165,7 +169,9 @@ def create_features(history, window=7):
         return np.empty((0, window + 18)), np.empty((0,))
     return np.array(X), np.array(y)
 
+# ------------------------------
 # Experts
+# ------------------------------
 def expert_markov_prob(history):
     if not history:
         return 0.5
@@ -234,14 +240,6 @@ def expert_nb_prob(nb_model, history, window=7):
         return 0.5
     return nb_model.predict_proba([X_all[-1]])[0][1]
 
-def expert_knn_prob(knn_model, history, window=7):
-    if knn_model is None or len(history) < window:
-        return 0.5
-    X_all, _ = create_features(history, window)
-    if X_all.size == 0:
-        return 0.5
-    return knn_model.predict_proba([X_all[-1]])[0][1]
-
 def expert_dt_prob(dt_model, history, window=7):
     if dt_model is None or len(history) < window:
         return 0.5
@@ -250,14 +248,6 @@ def expert_dt_prob(dt_model, history, window=7):
         return 0.5
     return dt_model.predict_proba([X_all[-1]])[0][1]
 
-def expert_et_prob(et_model, history, window=7):
-    if et_model is None or len(history) < window:
-        return 0.5
-    X_all, _ = create_features(history, window)
-    if X_all.size == 0:
-        return 0.5
-    return et_model.predict_proba([X_all[-1]])[0][1]
-
 def expert_ada_prob(ada_model, history, window=7):
     if ada_model is None or len(history) < window:
         return 0.5
@@ -265,14 +255,6 @@ def expert_ada_prob(ada_model, history, window=7):
     if X_all.size == 0:
         return 0.5
     return ada_model.predict_proba([X_all[-1]])[0][1]
-
-def expert_gb_prob(gb_model, history, window=7):
-    if gb_model is None or len(history) < window:
-        return 0.5
-    X_all, _ = create_features(history, window)
-    if X_all.size == 0:
-        return 0.5
-    return gb_model.predict_proba([X_all[-1]])[0][1]
 
 def expert_xgb_prob(xgb_model, history, window=7):
     if xgb_model is None or len(history) < window:
@@ -306,19 +288,13 @@ def expert_pa_prob(pa_model, history, window=7):
         return 0.5
     return pa_model.predict_proba([X_all[-1]])[0][1]
 
-def expert_bagging_prob(bagging_model, history, window=7):
-    if bagging_model is None or len(history) < window:
-        return 0.5
-    X_all, _ = create_features(history, window)
-    if X_all.size == 0:
-        return 0.5
-    return bagging_model.predict_proba([X_all[-1]])[0][1]
-
+# ------------------------------
 # Meta-ensemble
+# ------------------------------
 def init_meta_state():
     return {
-        "names": ["markov", "freq", "wma", "sgd", "rf", "bayesian", "lgbm", "logistic", "nb", "knn", "dt", "et", "ada", "gb", "xgb", "svc", "perceptron", "pa", "bagging"],
-        "weights": np.ones(19) / 19.0,
+        "names": ["markov", "freq", "wma", "sgd", "rf", "bayesian", "lgbm", "logistic", "nb", "dt", "ada", "xgb", "svc", "perceptron", "pa"],
+        "weights": np.ones(15) / 15.0,
         "loss_history": deque(maxlen=200),
         "eta": 0.5,
         "decay": 0.999,
@@ -327,7 +303,7 @@ def init_meta_state():
     }
 
 class RLPolicy:
-    def __init__(self, state_size=12, n_experts=19):
+    def __init__(self, state_size=12, n_experts=15):
         self.weights = np.ones(n_experts) / n_experts
         self.lr = 0.005
 
@@ -371,7 +347,9 @@ def route_expert(probs, losses, risk_score):
     inv_losses = 1 / (np.array(losses) + 1e-8)
     return np.dot(probs, inv_losses / inv_losses.sum())
 
+# ------------------------------
 # Combined predict
+# ------------------------------
 def combined_predict(session_state, history, window=7, label_smoothing_alpha=0.1, risk_threshold=0.55, skip_on_high_risk=True):
     s = session_state
     default_result = {
@@ -389,8 +367,8 @@ def combined_predict(session_state, history, window=7, label_smoothing_alpha=0.1
         "binom_p": 1.0,
         "binom_dev": 0.0,
         "dynamic_threshold": risk_threshold,
-        "expert_probs": [0.5] * 19,
-        "weights": s["meta"].get("weights", np.ones(19) / 19.0),
+        "expert_probs": [0.5] * 15,
+        "weights": s["meta"].get("weights", np.ones(15) / 15.0),
         "eta": s["meta"].get("eta", 0.5)
     }
     if not history:
@@ -429,22 +407,18 @@ def combined_predict(session_state, history, window=7, label_smoothing_alpha=0.1
         expert_lgbm_prob(s.get("lgbm_model"), history, window) if not use_default else 0.5,
         expert_logistic_prob(s.get("logistic_model"), history, window) if not use_default else 0.5,
         expert_nb_prob(s.get("nb_model"), history, window) if not use_default else 0.5,
-        expert_knn_prob(s.get("knn_model"), history, window) if not use_default else 0.5,
         expert_dt_prob(s.get("dt_model"), history, window) if not use_default else 0.5,
-        expert_et_prob(s.get("et_model"), history, window) if not use_default else 0.5,
         expert_ada_prob(s.get("ada_model"), history, window) if not use_default else 0.5,
-        expert_gb_prob(s.get("gb_model"), history, window) if not use_default else 0.5,
         expert_xgb_prob(s.get("xgb_model"), history, window) if not use_default else 0.5,
         expert_svc_prob(s.get("svc_model"), history, window) if not use_default else 0.5,
         expert_perceptron_prob(s.get("perceptron_model"), history, window) if not use_default else 0.5,
-        expert_pa_prob(s.get("pa_model"), history, window) if not use_default else 0.5,
-        expert_bagging_prob(s.get("bagging_model"), history, window) if not use_default else 0.5
+        expert_pa_prob(s.get("pa_model"), history, window) if not use_default else 0.5
     ]
     base_eta = s["meta"].get("eta", 0.5)
     t = len(s.get("meta_steps", [])) or 1
     eta = adaptive_eta(base_eta, ent_norm, streak, t)
-    weights = s["meta"].get("weights", np.ones(19) / 19.0)
-    weights = weights / weights.sum() if weights.sum() > 0 else np.ones(19) / 19.0
+    weights = s["meta"].get("weights", np.ones(15) / 15.0)
+    weights = weights / weights.sum() if weights.sum() > 0 else np.ones(15) / 15.0
     losses = [log_loss(1, p) for p in probs]
     final_prob_raw = route_expert(probs, losses, bias_level + ent_norm) if bias_level > 0.3 else np.dot(weights, probs)
     final_prob_raw = np.clip(final_prob_raw + adjustment, 0.0, 1.0)
@@ -457,7 +431,7 @@ def combined_predict(session_state, history, window=7, label_smoothing_alpha=0.1
     hist_acc = np.mean(s["meta"]["historical_accuracy"]) if s["meta"]["historical_accuracy"] else 0.5
     dynamic_threshold = risk_threshold * (1.0 - 0.2 * (1 - hist_acc))
     skip = skip_on_high_risk and (risk_score > 0.7 or max(prob_smoothed, 1 - prob_smoothed) < dynamic_threshold)
-    return {
+    result = {
         "prob": prob_smoothed,
         "raw_prob": final_prob_raw,
         "expert_probs": probs,
@@ -476,8 +450,11 @@ def combined_predict(session_state, history, window=7, label_smoothing_alpha=0.1
         "binom_dev": binom_dev,
         "dynamic_threshold": dynamic_threshold
     }
+    return result
 
+# ------------------------------
 # Streamlit UI
+# ------------------------------
 st.set_page_config(page_title="AI Meta-Ensemble v5 — Enhanced with +20 ML Models", layout="wide")
 st.title("🧠 AI Meta-Ensemble v5 — Enhanced Real-time T/X Predictor with +20 ML Models, Bias Detection & Adaptive Learning")
 
@@ -492,16 +469,12 @@ if "metrics" not in st.session_state: st.session_state.metrics = {"rounds": [], 
 if "meta_steps" not in st.session_state: st.session_state.meta_steps = []
 if "logistic_model" not in st.session_state: st.session_state.logistic_model = None
 if "nb_model" not in st.session_state: st.session_state.nb_model = None
-if "knn_model" not in st.session_state: st.session_state.knn_model = None
 if "dt_model" not in st.session_state: st.session_state.dt_model = None
-if "et_model" not in st.session_state: st.session_state.et_model = None
 if "ada_model" not in st.session_state: st.session_state.ada_model = None
-if "gb_model" not in st.session_state: st.session_state.gb_model = None
 if "xgb_model" not in st.session_state: st.session_state.xgb_model = None
 if "svc_model" not in st.session_state: st.session_state.svc_model = None
 if "perceptron_model" not in st.session_state: st.session_state.perceptron_model = None
 if "pa_model" not in st.session_state: st.session_state.pa_model = None
-if "bagging_model" not in st.session_state: st.session_state.bagging_model = None
 
 st.sidebar.header("Settings")
 window = st.sidebar.number_input("Window size (features)", min_value=3, max_value=30, value=st.session_state.window)
@@ -539,16 +512,12 @@ if st.sidebar.button("Reset all"):
     st.session_state.rl_policy = RLPolicy()
     st.session_state.logistic_model = None
     st.session_state.nb_model = None
-    st.session_state.knn_model = None
     st.session_state.dt_model = None
-    st.session_state.et_model = None
     st.session_state.ada_model = None
-    st.session_state.gb_model = None
     st.session_state.xgb_model = None
     st.session_state.svc_model = None
     st.session_state.perceptron_model = None
     st.session_state.pa_model = None
-    st.session_state.bagging_model = None
     st.session_state.metrics = {"rounds": [], "pred_prob": [], "real": [], "loss": []}
     st.session_state.meta_steps = []
     st.success("Reset xong.")
@@ -627,16 +596,12 @@ if len(st.session_state.history) >= 2:
             expert_lgbm_prob(st.session_state.get("lgbm_model"), history_before, window),
             expert_logistic_prob(st.session_state.get("logistic_model"), history_before, window),
             expert_nb_prob(st.session_state.get("nb_model"), history_before, window),
-            expert_knn_prob(st.session_state.get("knn_model"), history_before, window),
             expert_dt_prob(st.session_state.get("dt_model"), history_before, window),
-            expert_et_prob(st.session_state.get("et_model"), history_before, window),
             expert_ada_prob(st.session_state.get("ada_model"), history_before, window),
-            expert_gb_prob(st.session_state.get("gb_model"), history_before, window),
             expert_xgb_prob(st.session_state.get("xgb_model"), history_before, window),
             expert_svc_prob(st.session_state.get("svc_model"), history_before, window),
             expert_perceptron_prob(st.session_state.get("perceptron_model"), history_before, window),
-            expert_pa_prob(st.session_state.get("pa_model"), history_before, window),
-            expert_bagging_prob(st.session_state.get("bagging_model"), history_before, window)
+            expert_pa_prob(st.session_state.get("pa_model"), history_before, window)
         ]
         losses = [log_loss(true_label, p) for p in probs_before]
         recent_hist = [1 if x == "Tài" else 0 for x in history_before[-window:]] if history_before else []
@@ -685,50 +650,38 @@ if len(st.session_state.history) >= 2:
                     st.session_state.sgd_model = SGDClassifier(loss="log_loss", max_iter=1000, tol=1e-3, random_state=42)
                 st.session_state.sgd_model.partial_fit(new_X, new_y, classes=[0, 1])
                 if st.session_state.rf_model is None:
-                    st.session_state.rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+                    st.session_state.rf_model = RandomForestClassifier(n_estimators=50, max_depth=8, random_state=42)
                 st.session_state.rf_model.fit(new_X, new_y)
                 if st.session_state.lgbm_model is None:
-                    st.session_state.lgbm_model = LGBMClassifier(n_estimators=100, random_state=42)
+                    st.session_state.lgbm_model = LGBMClassifier(n_estimators=50, random_state=42)
                 st.session_state.lgbm_model.fit(new_X, new_y)
                 if st.session_state.logistic_model is None:
-                    st.session_state.logistic_model = LogisticRegression(max_iter=1000, random_state=42)
+                    st.session_state.logistic_model = LogisticRegression(max_iter=500, random_state=42)
                 st.session_state.logistic_model.fit(new_X, new_y)
                 if st.session_state.nb_model is None:
                     st.session_state.nb_model = GaussianNB()
                 st.session_state.nb_model.fit(new_X, new_y)
-                if st.session_state.knn_model is None:
-                    st.session_state.knn_model = KNeighborsClassifier(n_neighbors=5)
-                st.session_state.knn_model.fit(new_X, new_y)
                 if st.session_state.dt_model is None:
-                    st.session_state.dt_model = DecisionTreeClassifier(random_state=42)
+                    st.session_state.dt_model = DecisionTreeClassifier(max_depth=8, random_state=42)
                 st.session_state.dt_model.fit(new_X, new_y)
-                if st.session_state.et_model is None:
-                    st.session_state.et_model = ExtraTreesClassifier(n_estimators=100, random_state=42)
-                st.session_state.et_model.fit(new_X, new_y)
                 if st.session_state.ada_model is None:
-                    st.session_state.ada_model = AdaBoostClassifier(n_estimators=100, random_state=42)
+                    st.session_state.ada_model = AdaBoostClassifier(n_estimators=50, random_state=42)
                 st.session_state.ada_model.fit(new_X, new_y)
-                if st.session_state.gb_model is None:
-                    st.session_state.gb_model = GradientBoostingClassifier(n_estimators=100, random_state=42)
-                st.session_state.gb_model.fit(new_X, new_y)
                 if st.session_state.xgb_model is None:
-                    st.session_state.xgb_model = XGBClassifier(n_estimators=100, random_state=42, eval_metric='logloss')
+                    st.session_state.xgb_model = XGBClassifier(n_estimators=50, random_state=42, eval_metric='logloss')
                 st.session_state.xgb_model.fit(new_X, new_y)
                 if st.session_state.svc_model is None:
                     svc = SVC(probability=True, random_state=42)
-                    st.session_state.svc_model = CalibratedClassifierCV(svc, method='sigmoid', cv=5)
+                    st.session_state.svc_model = CalibratedClassifierCV(svc, method='sigmoid', cv=3)
                 st.session_state.svc_model.fit(new_X, new_y)
                 if st.session_state.perceptron_model is None:
-                    perceptron = Perceptron(max_iter=1000, tol=1e-3, random_state=42)
-                    st.session_state.perceptron_model = CalibratedClassifierCV(perceptron, method='sigmoid', cv=5)
+                    perceptron = Perceptron(max_iter=500, tol=1e-3, random_state=42)
+                    st.session_state.perceptron_model = CalibratedClassifierCV(perceptron, method='sigmoid', cv=3)
                 st.session_state.perceptron_model.fit(new_X, new_y)
                 if st.session_state.pa_model is None:
-                    pa = PassiveAggressiveClassifier(max_iter=1000, tol=1e-3, random_state=42)
-                    st.session_state.pa_model = CalibratedClassifierCV(pa, method='sigmoid', cv=5)
+                    pa = PassiveAggressiveClassifier(max_iter=500, tol=1e-3, random_state=42)
+                    st.session_state.pa_model = CalibratedClassifierCV(pa, method='sigmoid', cv=3)
                 st.session_state.pa_model.fit(new_X, new_y)
-                if st.session_state.bagging_model is None:
-                    st.session_state.bagging_model = BaggingClassifier(n_estimators=100, random_state=42)
-                st.session_state.bagging_model.fit(new_X, new_y)
 
 st.subheader("5 — Thống Kê Hiệu Suất")
 if st.session_state.meta["historical_accuracy"]:
