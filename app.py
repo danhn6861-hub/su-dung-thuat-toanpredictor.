@@ -10,7 +10,6 @@ from collections import deque
 import warnings
 import pickle
 import os
-from functools import lru_cache
 import logging
 
 # Thiết lập logging
@@ -25,7 +24,6 @@ warnings.filterwarnings("ignore")
 def safe_array(arr):
     return np.array(arr, dtype=float)
 
-@st.cache_data
 def handle_outliers(arr):
     arr = safe_array(arr)
     if arr.size < 2:
@@ -38,7 +36,6 @@ def handle_outliers(arr):
     arr = np.clip(arr, lower, upper)
     return arr.tolist()
 
-@st.cache_data
 def ema_smoothing(arr, alpha=0.3):
     smoothed = []
     for i, v in enumerate(arr):
@@ -48,7 +45,6 @@ def ema_smoothing(arr, alpha=0.3):
             smoothed.append(alpha * float(v) + (1 - alpha) * smoothed[-1])
     return smoothed
 
-@st.cache_data
 def weighted_moving_average(arr):
     arr = safe_array(arr)
     if arr.size == 0:
@@ -56,7 +52,6 @@ def weighted_moving_average(arr):
     weights = np.arange(1, arr.size + 1, dtype=float) ** 1.5
     return np.dot(arr, weights) / weights.sum()
 
-@st.cache_data
 def autocorr(arr, lag=1):
     arr = safe_array(arr)
     if arr.size <= lag:
@@ -66,21 +61,12 @@ def autocorr(arr, lag=1):
     den = np.sum((arr - arr_mean) ** 2)
     return num / den if den != 0 else 0.0
 
-@st.cache_data
-def alternation_score(arr):
-    if len(arr) < 2:
-        return 0.0
-    alt = sum(1 for i in range(1, len(arr)) if int(round(arr[i])) != int(round(arr[i-1])))
-    return alt / (len(arr) - 1)
-
-@st.cache_data
 def switch_rate(arr):
     if len(arr) < 2:
         return 0.0
     switches = sum(1 for i in range(1, len(arr)) if arr[i] != arr[i-1])
     return switches / (len(arr) - 1)
 
-@st.cache_data
 def runs_test(arr):
     arr_int = [int(round(x)) for x in arr]
     if len(arr_int) < 2:
@@ -96,7 +82,6 @@ def runs_test(arr):
     p = 2 * (1 - norm.cdf(abs(z)))
     return z, p
 
-@st.cache_data
 def spectral_bias(arr):
     if len(arr) < 4:
         return 0.0, 0.0
@@ -111,7 +96,6 @@ def spectral_bias(arr):
     cycle_strength = np.max(power_nonzero) / np.sum(power_nonzero)
     return cycle_length / len(arr), cycle_strength
 
-@st.cache_data
 def repetitive_score(arr):
     if len(arr) < 5:
         return 0.0
@@ -120,7 +104,6 @@ def repetitive_score(arr):
         return 1.0
     return 0.0
 
-@st.cache_data
 def binomial_bias_test(arr, p=0.5):
     n = len(arr)
     if n < 10:
@@ -130,7 +113,6 @@ def binomial_bias_test(arr, p=0.5):
     deviation = abs(k / n - p)
     return result.pvalue, deviation
 
-@st.cache_data
 def check_data_bias(history, threshold=0.75):
     if not history:
         return False, 0.5
@@ -141,11 +123,6 @@ def check_data_bias(history, threshold=0.75):
 # ------------------------------
 # Feature engineering
 # ------------------------------
-@st.cache_data
-def create_features_cached(history_tuple, window):
-    history = list(history_tuple)
-    return create_features(history, window)
-
 def create_features(history, window=7):
     logger.info("Bắt đầu tạo đặc trưng")
     encode = {"Tài": 1, "Xỉu": 0}
@@ -185,7 +162,6 @@ def create_features(history, window=7):
 # ------------------------------
 # Experts
 # ------------------------------
-@st.cache_data
 def expert_markov_prob(history):
     if not history:
         return 0.5
@@ -198,13 +174,11 @@ def expert_markov_prob(history):
             next_counts[h[i + 1]] += 1.0
     return next_counts[1] / sum(next_counts)
 
-@st.cache_data
 def expert_freq_prob(history):
     if not history:
         return 0.5
     return sum(1 for x in history if x == "Tài") / len(history)
 
-@st.cache_data
 def expert_wma_prob(history, window=7):
     arr = [1 if x == "Tài" else 0 for x in history[-window:]]
     return weighted_moving_average(arr) if arr else 0.5
@@ -227,7 +201,6 @@ def expert_lgbm_prob(_lgbm_model, history, window=7):
         return 0.5
     return _lgbm_model.predict_proba([X_all[-1]])[0][1]
 
-@st.cache_data
 def expert_bayesian_prob(history, alpha=1.0, beta=1.0):
     if not history:
         return 0.5
@@ -265,11 +238,10 @@ def expert_catboost_prob(_catboost_model, history, window=7):
 # ------------------------------
 # Meta-ensemble
 # ----------------------
-@st.cache_data
 def init_meta_state():
     return {
         "names": ["markov", "freq", "wma", "sgd", "lgbm", "bayesian", "logistic", "nb", "catboost"],
-        "weights": np.array([0.1, 0.1, 0.1, 0.1, 0.15, 0.15, 0.1, 0.1, 0.2]),  # Tăng trọng số CatBoost
+        "weights": np.array([0.1, 0.1, 0.1, 0.1, 0.15, 0.15, 0.1, 0.1, 0.2]),
         "loss_history": deque(maxlen=200),
         "eta": 0.5,
         "decay": 0.999,
@@ -287,7 +259,7 @@ class RLPolicy:
         self.lr = 0.05
 
     def predict(self, state):
-        weights = self.weights + np.random.normal(0, 0.02, len(self.weights))  # Tăng exploration
+        weights = self.weights + np.random.normal(0, 0.02, len(self.weights))
         return weights / weights.sum()
 
     def update(self, state, reward, weights):
@@ -300,7 +272,6 @@ def rl_adjust_weights(rl_policy, state, reward, weights):
     new_weights = rl_policy.update(state, reward, weights)
     return new_weights
 
-@st.cache_data
 def adaptive_eta(base_eta, entropy_val, streak, t=1):
     ent_term = np.clip(entropy_val, 0.0, 1.0)
     streak_term = np.clip(streak / 10.0, 0.0, 1.0)
@@ -309,7 +280,6 @@ def adaptive_eta(base_eta, entropy_val, streak, t=1):
     eta *= (1.0 - 1e-4 * t)
     return eta
 
-@st.cache_data
 def hedge_update(weights, losses, eta):
     losses = np.array(losses)
     exp_term = np.exp(-eta * losses)
@@ -325,7 +295,6 @@ def log_loss(true_label, prob):
     p = np.clip(prob, eps, 1 - eps)
     return - (true_label * np.log(p) + (1 - true_label) * np.log(1 - p))
 
-@st.cache_data
 def route_expert(probs, losses, risk_score, rep_score):
     if risk_score > 0.7 or rep_score > 0.8:
         return probs[np.argmin(losses)]
@@ -335,7 +304,6 @@ def route_expert(probs, losses, risk_score, rep_score):
 # ------------------------------
 # Combined predict
 # ----------------------
-@st.cache_data
 def combined_predict(_session_state, history_tuple, window=7, label_smoothing_alpha=0.1, risk_threshold=0.55, skip_on_high_risk=True):
     logger.info("Bắt đầu dự đoán")
     s = _session_state
@@ -357,8 +325,8 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
         "binom_dev": 0.0,
         "dynamic_threshold": risk_threshold,
         "expert_probs": [0.5] * 9,
-        "weights": s["meta"].get("weights", np.array([0.1, 0.1, 0.1, 0.1, 0.15, 0.15, 0.1, 0.1, 0.2])),
-        "eta": s["meta"].get("eta", 0.5)
+        "weights": [1/9] * 9,
+        "eta": 0.5
     }
     if not history:
         return default_result
@@ -391,15 +359,15 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
     X_all, _ = create_features(history, window)
     use_default = X_all.size == 0
     probs = [
-        expert_markov_prob(tuple(history)),
-        expert_freq_prob(tuple(history)),
-        expert_wma_prob(tuple(history), window),
-        expert_sgd_prob(s.get("sgd_model"), tuple(history), window) if not use_default else 0.5,
-        expert_lgbm_prob(s.get("lgbm_model"), tuple(history), window) if not use_default else 0.5,
-        expert_bayesian_prob(tuple(history)),
-        expert_logistic_prob(s.get("logistic_model"), tuple(history), window) if not use_default else 0.5,
-        expert_nb_prob(s.get("nb_model"), tuple(history), window) if not use_default else 0.5,
-        expert_catboost_prob(s.get("catboost_model"), tuple(history), window) if not use_default else 0.5
+        expert_markov_prob(history),
+        expert_freq_prob(history),
+        expert_wma_prob(history, window),
+        expert_sgd_prob(s.get("sgd_model"), history, window) if not use_default else 0.5,
+        expert_lgbm_prob(s.get("lgbm_model"), history, window) if not use_default else 0.5,
+        expert_bayesian_prob(history),
+        expert_logistic_prob(s.get("logistic_model"), history, window) if not use_default else 0.5,
+        expert_nb_prob(s.get("nb_model"), history, window) if not use_default else 0.5,
+        expert_catboost_prob(s.get("catboost_model"), history, window) if not use_default else 0.5
     ]
     base_eta = s["meta"].get("eta", 0.5)
     t = len(s.get("meta_steps", [])) or 1
@@ -447,7 +415,7 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
 def train_models(_sgd_model, _lgbm_model, _logistic_model, _nb_model, _catboost_model, history, window):
     logger.info("Bắt đầu huấn luyện mô hình")
     Xb, yb = create_features(history, window)
-    if Xb.size > 0 and len(np.unique(yb)) > 1 and len(Xb) >= 40:  # Yêu cầu tối thiểu 40 mẫu
+    if Xb.size > 0 and len(np.unique(yb)) > 1 and len(Xb) >= 40:
         batch_size = min(64, Xb.shape[0])
         new_X = Xb[-batch_size:]
         new_y = yb[-batch_size:]
@@ -581,14 +549,40 @@ st.write("Lịch sử (mới nhất cuối):", st.session_state.history[-20:])
 # Dự đoán
 st.subheader("2 — Dự đoán ván TIẾP THEO")
 pred_placeholder = st.empty()
+pred_info = None
 if len(st.session_state.history) < window:
     pred_placeholder.warning(f"Chưa đủ {window} ván để dự đoán. Vui lòng nhập thêm dữ liệu.")
 else:
-    with st.spinner("Đang tính toán dự đoán..."):
-        pred_info = combined_predict(st.session_state, tuple(st.session_state.history), window=window,
-                                    label_smoothing_alpha=label_smoothing_alpha,
-                                    risk_threshold=confidence_threshold,
-                                    skip_on_high_risk=risk_skip_enabled)
+    try:
+        with st.spinner("Đang tính toán dự đoán..."):
+            pred_info = combined_predict(st.session_state, tuple(st.session_state.history), window=window,
+                                        label_smoothing_alpha=label_smoothing_alpha,
+                                        risk_threshold=confidence_threshold,
+                                        skip_on_high_risk=risk_skip_enabled)
+    except Exception as e:
+        logger.error(f"Lỗi trong combined_predict: {e}")
+        pred_placeholder.error("Lỗi khi tính toán dự đoán. Vui lòng kiểm tra logs.")
+        pred_info = {
+            "prob": 0.5,
+            "raw_prob": 0.5,
+            "skip": True,
+            "risk_score": 1.0,
+            "entropy": 1.0,
+            "streak": 0,
+            "bias_level": 0.0,
+            "runs_z": 0.0,
+            "runs_p": 1.0,
+            "cycle_length": 0.0,
+            "cycle_strength": 0.0,
+            "rep_score": 0.0,
+            "binom_p": 1.0,
+            "binom_dev": 0.0,
+            "dynamic_threshold": confidence_threshold,
+            "expert_probs": [0.5] * 9,
+            "weights": [1/9] * 9,
+            "eta": 0.5
+        }
+if pred_info:
     prob = pred_info["prob"]
     skip = pred_info["skip"]
     pred_label = "Tài" if prob > 0.5 else "Xỉu"
@@ -602,13 +596,8 @@ else:
 # Experts & Weights
 with st.expander("3 — Experts & Weights"):
     names = st.session_state.meta.get("names", ["markov", "freq", "wma", "sgd", "lgbm", "bayesian", "logistic", "nb", "catboost"])
-    # Kiểm tra pred_info tồn tại
-    if 'pred_info' not in locals() or pred_info is None:
-        expert_probs = [0.5] * len(names)
-        weights = [1/len(names)] * len(names)
-    else:
-        expert_probs = pred_info.get("expert_probs", [0.5] * len(names))
-        weights = pred_info.get("weights", [1/len(names)] * len(names))
+    expert_probs = pred_info.get("expert_probs", [0.5] * len(names)) if pred_info else [0.5] * len(names)
+    weights = pred_info.get("weights", [1/len(names)] * len(names)) if pred_info else [1/len(names)] * len(names)
     num_cols = min(len(names), 9)
     cols = st.columns(num_cols)
     for i, name in enumerate(names):
@@ -622,20 +611,21 @@ with st.expander("3 — Experts & Weights"):
             wcols[i % num_cols].metric(name, f"{weights[i]:.3f}" if weights[i] is not None else "N/A")
         else:
             wcols[i % num_cols].metric(name, "N/A")
+
 # Micro-patterns & Bias
 with st.expander("4 — Micro-patterns & Bias (recent window)"):
     recent = [1 if x == "Tài" else 0 for x in st.session_state.history[-window:]] if st.session_state.history else []
-    if recent:
+    if recent and pred_info:
         ac1 = autocorr(recent, lag=1)
         ac2 = autocorr(recent, lag=2)
         alt = switch_rate(recent)
-        st.write(f"Entropy (base2): {pred_info['entropy']:.3f} | Autocorr1: {ac1:.3f} | Autocorr2: {ac2:.3f} | Switch rate: {alt:.3f}")
-        st.write(f"Runs test Z: {pred_info.get('runs_z', 0.0):.3f} (p: {pred_info['runs_p']:.3f})")
-        st.write(f"Cycle length: {pred_info['cycle_length']:.3f} | Cycle strength: {pred_info['cycle_strength']:.3f}")
-        st.write(f"Repetitive score: {pred_info['rep_score']:.3f}")
-        st.write(f"Binomial bias test p: {pred_info['binom_p']:.3f} | Deviation from 50%: {pred_info['binom_dev']:.3f}")
+        st.write(f"Entropy (base2): {pred_info.get('entropy', 1.0):.3f} | Autocorr1: {ac1:.3f} | Autocorr2: {ac2:.3f} | Switch rate: {alt:.3f}")
+        st.write(f"Runs test Z: {pred_info.get('runs_z', 0.0):.3f} (p: {pred_info.get('runs_p', 1.0):.3f})")
+        st.write(f"Cycle length: {pred_info.get('cycle_length', 0.0):.3f} | Cycle strength: {pred_info.get('cycle_strength', 0.0):.3f}")
+        st.write(f"Repetitive score: {pred_info.get('rep_score', 0.0):.3f}")
+        st.write(f"Binomial bias test p: {pred_info.get('binom_p', 1.0):.3f} | Deviation from 50%: {pred_info.get('binom_dev', 0.0):.3f}")
     else:
-        st.write("Chưa đủ dữ liệu để tính micro-patterns.")
+        st.write("Chưa đủ dữ liệu hoặc không thể tính micro-patterns. Vui lòng nhập thêm ván.")
 
 # Huấn luyện mô hình
 st.sidebar.header("Training")
@@ -659,15 +649,15 @@ if len(st.session_state.history) >= 2 and len(st.session_state.history) % 5 == 0
     true_label = 1 if st.session_state.history[idx] == "Tài" else 0
     if len(history_before) >= window:
         probs_before = [
-            expert_markov_prob(tuple(history_before)),
-            expert_freq_prob(tuple(history_before)),
-            expert_wma_prob(tuple(history_before), window),
-            expert_sgd_prob(st.session_state.get("sgd_model"), tuple(history_before), window),
-            expert_lgbm_prob(st.session_state.get("lgbm_model"), tuple(history_before), window),
-            expert_bayesian_prob(tuple(history_before)),
-            expert_logistic_prob(st.session_state.get("logistic_model"), tuple(history_before), window),
-            expert_nb_prob(st.session_state.get("nb_model"), tuple(history_before), window),
-            expert_catboost_prob(st.session_state.get("catboost_model"), tuple(history_before), window)
+            expert_markov_prob(history_before),
+            expert_freq_prob(history_before),
+            expert_wma_prob(history_before, window),
+            expert_sgd_prob(st.session_state.get("sgd_model"), history_before, window),
+            expert_lgbm_prob(st.session_state.get("lgbm_model"), history_before, window),
+            expert_bayesian_prob(history_before),
+            expert_logistic_prob(st.session_state.get("logistic_model"), history_before, window),
+            expert_nb_prob(st.session_state.get("nb_model"), history_before, window),
+            expert_catboost_prob(st.session_state.get("catboost_model"), history_before, window)
         ]
         losses = [log_loss(true_label, p) for p in probs_before]
         recent_hist = [1 if x == "Tài" else 0 for x in history_before[-window:]] if history_before else []
@@ -689,7 +679,7 @@ if len(st.session_state.history) >= 2 and len(st.session_state.history) % 5 == 0
         alt = switch_rate(recent_hist)
         binom_p, binom_dev = binomial_bias_test(recent_hist)
         rep_score = repetitive_score(recent_hist)
-        state = [ent_val, streak, pred_info['risk_score'], pred_info['bias_level'], np.mean(losses), ac1, ac2, alt, rep_score]
+        state = [ent_val, streak, pred_info.get('risk_score', 1.0), pred_info.get('bias_level', 0.0), np.mean(losses), ac1, ac2, alt, rep_score]
         ensemble_cb = combined_predict(st.session_state, tuple(history_before), window=window,
                                       label_smoothing_alpha=label_smoothing_alpha,
                                       risk_threshold=confidence_threshold,
