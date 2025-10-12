@@ -257,20 +257,18 @@ class RLPolicy:
     def __init__(self, state_size=9, n_experts=9):
         self.weights = np.array([0.1, 0.1, 0.1, 0.1, 0.15, 0.15, 0.1, 0.1, 0.2])
         self.lr = 0.05
+        self.n_experts = n_experts
 
     def predict(self, state):
         weights = self.weights + np.random.normal(0, 0.02, len(self.weights))
         return weights / weights.sum()
 
-    def update(self, state, reward, weights):
+    def update(self, state, reward, weights, losses, reasons):
+        if reward < 0:
+            max_loss_idx = np.argmax(losses)
+            self.weights[max_loss_idx] *= (1 - self.lr * 0.5)
         self.weights = weights * (1 + self.lr * reward)
         return self.weights / self.weights.sum()
-
-def rl_adjust_weights(rl_policy, state, reward, weights):
-    if rl_policy is None:
-        return weights
-    new_weights = rl_policy.update(state, reward, weights)
-    return new_weights
 
 def adaptive_eta(base_eta, entropy_val, streak, t=1):
     ent_term = np.clip(entropy_val, 0.0, 1.0)
@@ -328,9 +326,11 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
         "dynamic_threshold": risk_threshold,
         "expert_probs": [0.5] * 9,
         "weights": [1/9] * 9,
-        "eta": 0.5
+        "eta": 0.5,
+        "hist_acc": 0.5
     }
     if not history:
+        logger.warning("Không có lịch sử để dự đoán")
         return default_result
     is_bias, tai_ratio = check_data_bias(history)
     if is_bias:
@@ -338,6 +338,7 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
         return default_result
     recent = [1 if x == "Tài" else 0 for x in history[-window:]] if len(history) >= window else [1 if x == "Tài" else 0 for x in history]
     if not recent:
+        logger.warning("Dữ liệu gần đây rỗng")
         return default_result
     recent = handle_outliers(recent)
     counts = np.bincount([int(round(x)) for x in recent], minlength=2)
@@ -385,7 +386,9 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
     ac1 = autocorr(recent, lag=1)
     risk_score = ent_norm * (1 - abs(ac1)) * (0.5 + alt) * (1 + bias_level)
     hist_acc = np.mean(s["meta"]["historical_accuracy"]) if s["meta"]["historical_accuracy"] else 0.5
-    dynamic_threshold = risk_threshold * (1.0 - 0.2 * (1 - hist_acc))
+    dynamic_threshold = risk_threshold * (0.8 + 0.2 * hist_acc)  # Điều chỉnh để nhạy hơn với hist_acc
+    if hist_acc == 0.5 and not s["meta"]["historical_accuracy"]:
+        logger.warning(f"historical_accuracy rỗng, sử dụng hist_acc mặc định: {hist_acc}")
     skip = skip_on_high_risk and (risk_score > 0.7 or max(prob_smoothed, 1 - prob_smoothed) < dynamic_threshold or rep_score > 0.9)
     result = {
         "prob": prob_smoothed,
@@ -405,9 +408,10 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
         "rep_score": rep_score,
         "binom_p": binom_p,
         "binom_dev": binom_dev,
-        "dynamic_threshold": dynamic_threshold
+        "dynamic_threshold": dynamic_threshold,
+        "hist_acc": hist_acc
     }
-    logger.info("Hoàn thành dự đoán")
+    logger.info(f"Hoàn thành dự đoán: dynamic_threshold={dynamic_threshold:.3f}, hist_acc={hist_acc:.3f}")
     return result
 
 # ------------------------------
@@ -580,6 +584,7 @@ else:
             "binom_p": 1.0,
             "binom_dev": 0.0,
             "dynamic_threshold": confidence_threshold,
+            "hist_acc": 0.5,
             "expert_probs": [0.5] * 9,
             "weights": [1/9] * 9,
             "eta": 0.5
@@ -590,10 +595,10 @@ if pred_info:
     pred_label = "Tài" if prob > 0.5 else "Xỉu"
     conf = max(prob, 1 - prob)
     if skip:
-        pred_placeholder.warning(f"⚠️ Không dự đoán (skip) — Risk score {pred_info['risk_score']:.3f}, Entropy {pred_info['entropy']:.3f}, Confidence {conf:.2%}, Bias level {pred_info['bias_level']:.3f}, Repetitive score {pred_info['rep_score']:.3f}, Dynamic threshold {pred_info['dynamic_threshold']:.3f}")
+        pred_placeholder.warning(f"⚠️ Không dự đoán (skip) — Risk score {pred_info['risk_score']:.3f}, Entropy {pred_info['entropy']:.3f}, Confidence {conf:.2%}, Bias level {pred_info['bias_level']:.3f}, Repetitive score {pred_info['rep_score']:.3f}, Dynamic threshold {pred_info['dynamic_threshold']:.3f}, Historical accuracy {pred_info['hist_acc']:.3f}")
     else:
         status = "Đáng tin cậy ✅" if conf >= pred_info['dynamic_threshold'] else "Xác suất thấp ⚠️"
-        pred_placeholder.success(f"Dự đoán: **{pred_label}** — Xác suất Tài (smoothed): {prob:.2%} — {status} (Dynamic threshold: {pred_info['dynamic_threshold']:.3f})")
+        pred_placeholder.success(f"Dự đoán: **{pred_label}** — Xác suất Tài (smoothed): {prob:.2%} — {status} (Dynamic threshold: {pred_info['dynamic_threshold']:.3f}, Historical accuracy: {pred_info['hist_acc']:.3f})")
 
 # Experts & Weights
 with st.expander("3 — Experts & Weights"):
@@ -645,11 +650,11 @@ if st.sidebar.button("Train Models Now"):
             st.success("Huấn luyện hoàn tất!")
 
 # Cập nhật trọng số và kinh nghiệm
-if len(st.session_state.history) >= 2 and len(st.session_state.history) > st.session_state.last_trained:
+if len(st.session_state.history) >= window + 1:  # Đảm bảo đủ dữ liệu để dự đoán
     idx = len(st.session_state.history) - 1
     history_before = st.session_state.history[:idx]
     true_label = 1 if st.session_state.history[idx] == "Tài" else 0
-    if len(history_before) >= window:
+    try:
         probs_before = [
             expert_markov_prob(history_before),
             expert_freq_prob(history_before),
@@ -681,7 +686,6 @@ if len(st.session_state.history) >= 2 and len(st.session_state.history) > st.ses
         alt = switch_rate(recent_hist)
         binom_p, binom_dev = binomial_bias_test(recent_hist)
         rep_score = repetitive_score(recent_hist)
-        state = [ent_val, streak, pred_info.get('risk_score', 1.0), pred_info.get('bias_level', 0.0), np.mean(losses), ac1, ac2, alt, rep_score]
         ensemble_cb = combined_predict(st.session_state, tuple(history_before), window=window,
                                       label_smoothing_alpha=label_smoothing_alpha,
                                       risk_threshold=confidence_threshold,
@@ -689,16 +693,56 @@ if len(st.session_state.history) >= 2 and len(st.session_state.history) > st.ses
         ensemble_prob_before = ensemble_cb.get("prob", 0.5)
         ens_loss = log_loss(true_label, ensemble_prob_before)
         reward = 1.0 if (ensemble_prob_before > 0.5) == true_label else -ens_loss * 1.5
-        new_w = rl_adjust_weights(st.session_state.rl_policy, state, reward, new_w)
-        st.session_state.meta["weights"] = new_w
-        st.session_state.meta_steps.append({"losses": losses, "eta": eta, "old_w": old_w.tolist(), "new_w": new_w.tolist(), "reward": reward})
         correct = 1 if (ensemble_prob_before > 0.5) == true_label else 0
         st.session_state.meta["historical_accuracy"].append(correct)
+        
+        # Xác định lý do thắng/thua chi tiết
+        reasons = []
         if reward < 0:
-            reason = "High entropy" if ent_val > 0.8 else "Streak mismatch" if streak > 3 else "Bias undetected" if binom_dev > 0.1 else "Repetitive pattern" if rep_score > 0.9 else "Pattern luân phiên thất bại"
-            st.session_state.meta["experience_log"].append(f"Thua ván {idx + 1}: {reason}. Adjust weight cho LGBM/Bayesian/CatBoost.")
+            if ent_val > 0.8:
+                reasons.append(f"Entropy cao ({ent_val:.3f})")
+            if streak > 3:
+                reasons.append(f"Streak dài ({streak})")
+            if binom_dev > 0.1:
+                reasons.append(f"Bias mạnh (deviation {binom_dev:.3f})")
+            if rep_score > 0.9:
+                reasons.append(f"Dự đoán lặp lại (rep_score {rep_score:.3f})")
+            if ensemble_cb.get('risk_score', 1.0) > 0.7:
+                reasons.append(f"Rủi ro cao (risk_score {ensemble_cb['risk_score']:.3f})")
+            if not reasons:
+                reasons.append("Pattern không rõ ràng")
+            max_loss_idx = np.argmax(losses)
+            max_loss_expert = st.session_state.meta["names"][max_loss_idx]
+            reason_str = "; ".join(reasons) + f". Expert tệ nhất: {max_loss_expert} (loss {losses[max_loss_idx]:.3f})"
+            st.session_state.meta["experience_log"].append(f"Thua ván {idx + 1}: {reason_str}. Giảm trọng số {max_loss_expert}.")
         else:
-            st.session_state.meta["experience_log"].append(f"Thắng ván {idx + 1}: Good pattern match.")
+            min_loss_idx = np.argmin(losses)
+            min_loss_expert = st.session_state.meta["names"][min_loss_idx]
+            reasons.append(f"Pattern tốt, expert tốt nhất: {min_loss_expert} (loss {losses[min_loss_idx]:.3f})")
+            if ent_val < 0.5:
+                reasons.append(f"Entropy thấp ({ent_val:.3f})")
+            if streak <= 3:
+                reasons.append(f"Streak hợp lý ({streak})")
+            if binom_dev < 0.1:
+                reasons.append(f"Không bias (deviation {binom_dev:.3f})")
+            reason_str = "; ".join(reasons)
+            st.session_state.meta["experience_log"].append(f"Thắng ván {idx + 1}: {reason_str}.")
+        
+        # Cập nhật trọng số với RLPolicy
+        state = [ent_val, streak, ensemble_cb.get('risk_score', 1.0), ensemble_cb.get('bias_level', 0.0), np.mean(losses), ac1, ac2, alt, rep_score]
+        new_w = rl_adjust_weights(st.session_state.rl_policy, state, reward, new_w, losses, reasons)
+        st.session_state.meta["weights"] = new_w
+        st.session_state.meta_steps.append({
+            "losses": losses,
+            "eta": eta,
+            "old_w": old_w.tolist(),
+            "new_w": new_w.tolist(),
+            "reward": reward,
+            "reasons": reasons
+        })
+        logger.info(f"Cập nhật kinh nghiệm ván {idx + 1}: correct={correct}, reward={reward:.3f}, reasons={reason_str}")
+    except Exception as e:
+        logger.error(f"Lỗi trong cập nhật kinh nghiệm ván {idx + 1}: {e}")
 
 # Thống kê hiệu suất
 st.subheader("5 — Thống Kê Hiệu Suất")
@@ -713,12 +757,12 @@ if st.session_state.meta["historical_accuracy"]:
     else:
         st.write("Chưa có loss được ghi nhận trong 10 ván gần nhất.")
 else:
-    st.write("Chưa có dữ liệu hiệu suất.")
+    st.write("Chưa có dữ liệu hiệu suất. Vui lòng nhập thêm ván và huấn luyện mô hình.")
 
 # Kinh nghiệm thắng/thua
 with st.expander("6 — Kinh Nghiệm Thắng/Thua"):
     if st.session_state.meta["experience_log"]:
-        for log in st.session_state.meta["experience_log"][-5:]:
+        for log in st.session_state.meta["experience_log"][-10:]:
             st.write(log)
     else:
-        st.write("Chưa có kinh nghiệm được ghi lại.")
+        st.write("Chưa có kinh nghiệm được ghi lại. Vui lòng nhập thêm ván.")
