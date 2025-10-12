@@ -6,6 +6,7 @@ from sklearn.naive_bayes import GaussianNB
 from lightgbm import LGBMClassifier
 from scipy.stats import entropy, zscore, norm, binomtest
 from collections import deque
+import math
 import warnings
 import pickle
 import os
@@ -128,17 +129,15 @@ def create_features(history, window=7):
                 break
         ratio_tai = counts[1] / counts.sum() if counts.sum() > 0 else 0.5
         wma = weighted_moving_average(ws)
-        pattern_consistency = np.std(ws)
         ac1 = autocorr(ws, lag=1)
-        bias = calc_bias_stats(tuple(ws))
         runs_z, runs_p = runs_test(ws)
         anom_score = anomaly_score(history[:i], window)
         binom_p, binom_dev = binomial_bias_test(ws)
-        features = ws + [ent, streak, ratio_tai, wma, pattern_consistency, ac1, bias['var'], runs_z, anom_score, binom_p, binom_dev]
+        features = ws + [ent, streak, ratio_tai, wma, ac1, runs_z, anom_score, binom_p, binom_dev]
         X.append(features)
         y.append(hist_num[i])
     if not X:
-        return np.empty((0, window + 11)), np.empty((0,))
+        return np.empty((0, window + 9)), np.empty((0,))
     return np.array(X), np.array(y)
 
 # ------------------------------
@@ -210,7 +209,7 @@ def expert_nb_prob(nb_model, history, window=7):
 def init_meta_state():
     return {
         "names": ["markov", "freq", "wma", "sgd", "lgbm", "bayesian", "logistic", "nb"],
-        "weights": np.array([0.1, 0.1, 0.1, 0.1, 0.2, 0.2, 0.1, 0.1]),  # Tăng trọng số LGBM, Bayesian
+        "weights": np.array([0.1, 0.1, 0.1, 0.1, 0.2, 0.2, 0.1, 0.1]),
         "loss_history": deque(maxlen=200),
         "eta": 0.5,
         "decay": 0.999,
@@ -418,7 +417,7 @@ c1, c2, c3 = st.columns(3)
 with c1:
     if st.button("🎯 Tài"):
         st.session_state.history.append("Tài")
-        if len(st.session_state.history) > 500:  # Giảm giới hạn lịch sử
+        if len(st.session_state.history) > 500:
             st.session_state.history = st.session_state.history[-500:]
 with c2:
     if st.button("🎯 Xỉu"):
@@ -434,10 +433,11 @@ st.write("Số ván hiện có:", len(st.session_state.history))
 st.write("Lịch sử (mới nhất cuối):", st.session_state.history)
 
 st.subheader("2 — Dự đoán ván TIẾP THEO")
-pred_info = combined_predict(st.session_state, st.session_state.history, window=window,
-                             label_smoothing_alpha=label_smoothing_alpha,
-                             risk_threshold=confidence_threshold,
-                             skip_on_high_risk=risk_skip_enabled)
+with st.spinner("Đang tính toán dự đoán..."):
+    pred_info = combined_predict(st.session_state, st.session_state.history, window=window,
+                                 label_smoothing_alpha=label_smoothing_alpha,
+                                 risk_threshold=confidence_threshold,
+                                 skip_on_high_risk=risk_skip_enabled)
 prob = pred_info["prob"]
 skip = pred_info["skip"]
 pred_label = "Tài" if prob > 0.5 else "Xỉu"
@@ -463,9 +463,7 @@ recent = [1 if x == "Tài" else 0 for x in st.session_state.history[-window:]] i
 if recent:
     ac1 = autocorr(recent, lag=1)
     alt = alternation_score(recent)
-    b = calc_bias_stats(tuple(recent))
     st.write(f"Entropy (base2): {pred_info['entropy']:.3f} | Autocorr1: {ac1:.3f} | Alternation: {alt:.3f}")
-    st.write(f"Variance: {b['var']:.4f}")
     st.write(f"Runs test Z: {pred_info.get('runs_z', 0.0):.3f} (p: {pred_info['runs_p']:.3f}) | Anomaly score: {pred_info['anom_score']:.3f}")
     st.write(f"Binomial bias test p: {pred_info['binom_p']:.3f} | Deviation from 50%: {pred_info['binom_dev']:.3f}")
 else:
@@ -503,9 +501,8 @@ if len(st.session_state.history) >= 2:
         new_w = hedge_update(old_w, losses, eta)
         ac1 = autocorr(recent_hist, lag=1)
         alt = alternation_score(recent_hist)
-        b = calc_bias_stats(tuple(recent_hist))
         binom_p, binom_dev = binomial_bias_test(recent_hist)
-        state = [ent_val, streak, pred_info['risk_score'], pred_info['bias_level'], np.mean(losses), ac1, alt, b['var']]
+        state = [ent_val, streak, pred_info['risk_score'], pred_info['bias_level'], np.mean(losses), ac1, alt]
         ensemble_cb = combined_predict(st.session_state, history_before, window=window,
                                        label_smoothing_alpha=label_smoothing_alpha,
                                        risk_threshold=confidence_threshold,
@@ -523,9 +520,9 @@ if len(st.session_state.history) >= 2:
             st.session_state.meta["experience_log"].append(f"Thua ván {idx + 1}: {reason}. Adjust weight cho LGBM/Bayesian.")
         else:
             st.session_state.meta["experience_log"].append(f"Thắng ván {idx + 1}: Good pattern match.")
-        if len(history_before) > window:
+        if len(history_before) > window and len(st.session_state.history) % 5 == 0:  # Huấn luyện mỗi 5 ván
             Xb, yb = create_features(history_before + [st.session_state.history[idx]], window)
-            if Xb.size > 0 and len(np.unique(yb)) > 1 and len(Xb) >= 10:  # Kiểm tra dữ liệu hợp lệ
+            if Xb.size > 0:
                 batch_size = min(32, Xb.shape[0])
                 new_X = Xb[-batch_size:]
                 new_y = yb[-batch_size:]
@@ -533,10 +530,10 @@ if len(st.session_state.history) >= 2:
                     st.session_state.sgd_model = SGDClassifier(loss="log_loss", max_iter=500, tol=1e-3, random_state=42)
                 st.session_state.sgd_model.partial_fit(new_X, new_y, classes=[0, 1])
                 if st.session_state.lgbm_model is None:
-                    st.session_state.lgbm_model = LGBMClassifier(n_estimators=30, random_state=42)
+                    st.session_state.lgbm_model = LGBMClassifier(n_estimators=20, random_state=42)
                 st.session_state.lgbm_model.fit(new_X, new_y)
                 if st.session_state.logistic_model is None:
-                    st.session_state.logistic_model = LogisticRegression(max_iter=200, random_state=42)
+                    st.session_state.logistic_model = LogisticRegression(max_iter=100, random_state=42)
                 st.session_state.logistic_model.fit(new_X, new_y)
                 if st.session_state.nb_model is None:
                     st.session_state.nb_model = GaussianNB()
@@ -552,3 +549,10 @@ if st.session_state.meta["historical_accuracy"]:
         st.write(f"Loss trung bình (10 ván gần nhất): {avg_loss:.3f}")
 else:
     st.write("Chưa có dữ liệu hiệu suất.")
+
+st.subheader("6 — Kinh Nghiệm Thắng/Thua")
+if st.session_state.meta["experience_log"]:
+    for log in st.session_state.meta["experience_log"][-5:]:
+        st.write(log)
+else:
+    st.write("Chưa có kinh nghiệm được ghi lại.")
