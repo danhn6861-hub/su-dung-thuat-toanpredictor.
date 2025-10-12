@@ -374,9 +374,30 @@ def route_expert(probs, losses, risk_score):
 # Combined predict
 def combined_predict(session_state, history, window=7, label_smoothing_alpha=0.1, risk_threshold=0.55, skip_on_high_risk=True):
     s = session_state
+    default_result = {
+        "prob": 0.5,
+        "raw_prob": 0.5,
+        "skip": True,
+        "risk_score": 1.0,
+        "entropy": 1.0,
+        "streak": 0,
+        "bias_level": 0.0,
+        "runs_z": 0.0,
+        "runs_p": 1.0,
+        "spec_bias": 0.0,
+        "anom_score": 0.0,
+        "binom_p": 1.0,
+        "binom_dev": 0.0,
+        "dynamic_threshold": risk_threshold,
+        "expert_probs": [0.5] * 19,
+        "weights": s["meta"].get("weights", np.ones(19) / 19.0),
+        "eta": s["meta"].get("eta", 0.5)
+    }
+    if not history:
+        return default_result
     recent = [1 if x == "Tài" else 0 for x in history[-window:]] if len(history) >= window else [1 if x == "Tài" else 0 for x in history]
     if not recent:
-        return {"prob": 0.5, "raw_prob": 0.5, "skip": True, "risk_score": 1.0}
+        return default_result
     recent = handle_outliers(recent)
     counts = np.bincount([int(round(x)) for x in recent], minlength=2)
     probs_counts = counts / counts.sum() if counts.sum() > 0 else np.array([0.5, 0.5])
