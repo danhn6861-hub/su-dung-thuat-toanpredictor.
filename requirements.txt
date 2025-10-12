@@ -2,6 +2,4 @@ streamlit
 numpy
 scikit-learn
 scipy
-xgboost
-matplotlib
 lightgbm
