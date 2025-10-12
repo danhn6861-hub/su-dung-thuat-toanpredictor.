@@ -51,7 +51,7 @@ def weighted_moving_average(arr):
     arr = safe_array(arr)
     if arr.size == 0:
         return 0.5
-    weights = np.arange(1, arr.size + 1, dtype=float)
+    weights = np.arange(1, arr.size + 1, dtype=float) ** 1.5  # Tăng trọng số cho dữ liệu gần
     return np.dot(arr, weights) / weights.sum()
 
 @st.cache_data
@@ -71,12 +71,12 @@ def alternation_score(arr):
     alt = sum(1 for i in range(1, len(arr)) if int(round(arr[i])) != int(round(arr[i-1])))
     return alt / (len(arr) - 1)
 
-@lru_cache(maxsize=128)
-def calc_bias_stats(arr_tuple):
-    a = np.array(arr_tuple)
-    if a.size == 0:
-        return {'var': 0.0}
-    return {'var': np.var(a)}
+@st.cache_data
+def switch_rate(arr):
+    if len(arr) < 2:
+        return 0.0
+    switches = sum(1 for i in range(1, len(arr)) if arr[i] != arr[i-1])
+    return switches / (len(arr) - 1)
 
 @st.cache_data
 def runs_test(arr):
@@ -103,6 +103,14 @@ def binomial_bias_test(arr, p=0.5):
     result = binomtest(k, n, p=p)
     deviation = abs(k / n - p)
     return result.pvalue, deviation
+
+@st.cache_data
+def check_data_bias(history, threshold=0.8):
+    if not history:
+        return False, 0.5
+    tai_count = sum(1 for x in history if x == "Tài")
+    ratio = tai_count / len(history)
+    return ratio > threshold or ratio < (1 - threshold), ratio
 
 # ------------------------------
 # Feature engineering
@@ -136,12 +144,13 @@ def create_features(history, window=7):
         ac1 = autocorr(ws, lag=1)
         runs_z, runs_p = runs_test(ws)
         binom_p, binom_dev = binomial_bias_test(ws)
-        features = ws + [ent, streak, ratio_tai, wma, ac1, runs_z, binom_p, binom_dev]
+        switch = switch_rate(ws_int)
+        features = ws + [ent, streak, ratio_tai, wma, ac1, runs_z, binom_p, binom_dev, switch]
         X.append(features)
         y.append(hist_num[i])
     logger.info("Hoàn thành tạo đặc trưng")
     if not X:
-        return np.empty((0, window + 8)), np.empty((0,))
+        return np.empty((0, window + 9)), np.empty((0,))
     return np.array(X), np.array(y)
 
 # ------------------------------
@@ -222,7 +231,7 @@ def expert_nb_prob(_nb_model, history, window=7):
 def init_meta_state():
     return {
         "names": ["markov", "freq", "wma", "sgd", "lgbm", "bayesian", "logistic", "nb"],
-        "weights": np.array([0.1, 0.1, 0.1, 0.1, 0.2, 0.2, 0.1, 0.1]),
+        "weights": np.array([0.1, 0.1, 0.1, 0.1, 0.25, 0.25, 0.1, 0.1]),  # Tăng trọng số LGBM, Bayesian
         "loss_history": deque(maxlen=200),
         "eta": 0.5,
         "decay": 0.999,
@@ -231,16 +240,17 @@ def init_meta_state():
     }
 
 @st.cache_resource
-def init_rl_policy(_state_size=7, _n_experts=8):
+def init_rl_policy(_state_size=8, _n_experts=8):
     return RLPolicy(_state_size, _n_experts)
 
 class RLPolicy:
-    def __init__(self, state_size=7, n_experts=8):
-        self.weights = np.array([0.1, 0.1, 0.1, 0.1, 0.2, 0.2, 0.1, 0.1])
-        self.lr = 0.01
+    def __init__(self, state_size=8, n_experts=8):
+        self.weights = np.array([0.1, 0.1, 0.1, 0.1, 0.25, 0.25, 0.1, 0.1])
+        self.lr = 0.05  # Tăng learning rate
 
     def predict(self, state):
-        return self.weights / self.weights.sum()
+        weights = self.weights + np.random.normal(0, 0.01, len(self.weights))  # Thêm exploration
+        return weights / weights.sum()
 
     def update(self, state, reward, weights):
         self.weights = weights * (1 + self.lr * reward)
@@ -266,6 +276,8 @@ def hedge_update(weights, losses, eta):
     losses = np.array(losses)
     exp_term = np.exp(-eta * losses)
     w = weights * exp_term
+    min_weight = 0.05  # Giới hạn trọng số tối thiểu
+    w = np.clip(w, min_weight, None)
     if np.isnan(w).any() or w.sum() <= 0:
         return np.ones_like(weights) / len(weights)
     return w / w.sum()
@@ -304,10 +316,14 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
         "binom_dev": 0.0,
         "dynamic_threshold": risk_threshold,
         "expert_probs": [0.5] * 8,
-        "weights": s["meta"].get("weights", np.array([0.1, 0.1, 0.1, 0.1, 0.2, 0.2, 0.1, 0.1])),
+        "weights": s["meta"].get("weights", np.array([0.1, 0.1, 0.1, 0.1, 0.25, 0.25, 0.1, 0.1])),
         "eta": s["meta"].get("eta", 0.5)
     }
     if not history:
+        return default_result
+    is_bias, tai_ratio = check_data_bias(history)
+    if is_bias:
+        logger.warning(f"Dữ liệu bias: Tỷ lệ Tài = {tai_ratio:.2f}")
         return default_result
     recent = [1 if x == "Tài" else 0 for x in history[-window:]] if len(history) >= window else [1 if x == "Tài" else 0 for x in history]
     if not recent:
@@ -344,7 +360,7 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
     base_eta = s["meta"].get("eta", 0.5)
     t = len(s.get("meta_steps", [])) or 1
     eta = adaptive_eta(base_eta, ent_norm, streak, t)
-    weights = s["meta"].get("weights", np.array([0.1, 0.1, 0.1, 0.1, 0.2, 0.2, 0.1, 0.1]))
+    weights = s["meta"].get("weights", np.array([0.1, 0.1, 0.1, 0.1, 0.25, 0.25, 0.1, 0.1]))
     weights = weights / weights.sum() if weights.sum() > 0 else np.ones(8) / 8.0
     losses = [log_loss(1, p) for p in probs]
     final_prob_raw = route_expert(probs, losses, bias_level + ent_norm) if bias_level > 0.3 else np.dot(weights, probs)
@@ -384,16 +400,16 @@ def combined_predict(_session_state, history_tuple, window=7, label_smoothing_al
 def train_models(_sgd_model, _lgbm_model, _logistic_model, _nb_model, history, window):
     logger.info("Bắt đầu huấn luyện mô hình")
     Xb, yb = create_features(history, window)
-    if Xb.size > 0 and len(np.unique(yb)) > 1 and len(Xb) >= 10:
-        batch_size = min(32, Xb.shape[0])
+    if Xb.size > 0 and len(np.unique(yb)) > 1 and len(Xb) >= 20:  # Yêu cầu tối thiểu 20 mẫu
+        batch_size = min(64, Xb.shape[0])
         new_X = Xb[-batch_size:]
         new_y = yb[-batch_size:]
         if _sgd_model is None:
             _sgd_model = SGDClassifier(loss="log_loss", max_iter=500, tol=1e-3, random_state=42)
         _sgd_model.partial_fit(new_X, new_y, classes=[0, 1])
         if _lgbm_model is None:
-            _lgbm_model = LGBMClassifier(n_estimators=20, random_state=42)
-        _lgbm_model.fit(new_X, new_y)
+            _lgbm_model = LGBMClassifier(n_estimators=20, random_state=42, early_stopping_rounds=5)
+        _lgbm_model.fit(new_X, new_y, eval_set=[(new_X, new_y)], eval_metric='logloss', verbose=False)
         if _logistic_model is None:
             _logistic_model = LogisticRegression(max_iter=100, random_state=42)
         _logistic_model.fit(new_X, new_y)
@@ -447,7 +463,7 @@ st.sidebar.header("State Management")
 save_file = "app_state.pkl"
 if st.sidebar.button("Save State"):
     try:
-        state = {k: v for k, v in st.session_state.items() if k != 'rl_policy'}  # RLPolicy không pickle được
+        state = {k: v for k, v in st.session_state.items() if k != 'rl_policy'}
         with open(save_file, 'wb') as f:
             pickle.dump(state, f)
         st.sidebar.success("State saved.")
@@ -488,7 +504,7 @@ c1, c2, c3 = st.columns(3)
 with c1:
     if st.button("🎯 Tài"):
         st.session_state.history.append("Tài")
-        if len(st.session_state.history) > 200:  # Giới hạn lịch sử
+        if len(st.session_state.history) > 200:
             st.session_state.history = st.session_state.history[-200:]
 with c2:
     if st.button("🎯 Xỉu"):
@@ -501,26 +517,31 @@ with c3:
             st.session_state.history.pop()
 
 st.write("Số ván hiện có:", len(st.session_state.history))
-st.write("Lịch sử (mới nhất cuối):", st.session_state.history[-20:])  # Chỉ hiển thị 20 ván
+is_bias, tai_ratio = check_data_bias(st.session_state.history)
+if is_bias:
+    st.warning(f"Dữ liệu bias! Tỷ lệ Tài: {tai_ratio:.2%}. Vui lòng nhập thêm dữ liệu đa dạng.")
+st.write("Lịch sử (mới nhất cuối):", st.session_state.history[-20:])
 
 # Dự đoán
 st.subheader("2 — Dự đoán ván TIẾP THEO")
 pred_placeholder = st.empty()
-with st.spinner("Đang tính toán dự đoán..."):
-    pred_info = combined_predict(st.session_state, tuple(st.session_state.history), window=window,
-                                label_smoothing_alpha=label_smoothing_alpha,
-                                risk_threshold=confidence_threshold,
-                                skip_on_high_risk=risk_skip_enabled)
-prob = pred_info["prob"]
-skip = pred_info["skip"]
-pred_label = "Tài" if prob > 0.5 else "Xỉu"
-conf = max(prob, 1 - prob)
-
-if skip:
-    pred_placeholder.warning(f"⚠️ Không dự đoán (skip) — Risk score {pred_info['risk_score']:.3f}, Entropy {pred_info['entropy']:.3f}, Confidence {conf:.2%}, Bias level {pred_info['bias_level']:.3f}, Dynamic threshold {pred_info['dynamic_threshold']:.3f}")
+if len(st.session_state.history) < window:
+    pred_placeholder.warning(f"Chưa đủ {window} ván để dự đoán. Vui lòng nhập thêm dữ liệu.")
 else:
-    status = "Đáng tin cậy ✅" if conf >= pred_info['dynamic_threshold'] else "Xác suất thấp ⚠️"
-    pred_placeholder.success(f"Dự đoán: **{pred_label}** — Xác suất Tài (smoothed): {prob:.2%} — {status} (Dynamic threshold: {pred_info['dynamic_threshold']:.3f})")
+    with st.spinner("Đang tính toán dự đoán..."):
+        pred_info = combined_predict(st.session_state, tuple(st.session_state.history), window=window,
+                                    label_smoothing_alpha=label_smoothing_alpha,
+                                    risk_threshold=confidence_threshold,
+                                    skip_on_high_risk=risk_skip_enabled)
+    prob = pred_info["prob"]
+    skip = pred_info["skip"]
+    pred_label = "Tài" if prob > 0.5 else "Xỉu"
+    conf = max(prob, 1 - prob)
+    if skip:
+        pred_placeholder.warning(f"⚠️ Không dự đoán (skip) — Risk score {pred_info['risk_score']:.3f}, Entropy {pred_info['entropy']:.3f}, Confidence {conf:.2%}, Bias level {pred_info['bias_level']:.3f}, Dynamic threshold {pred_info['dynamic_threshold']:.3f}")
+    else:
+        status = "Đáng tin cậy ✅" if conf >= pred_info['dynamic_threshold'] else "Xác suất thấp ⚠️"
+        pred_placeholder.success(f"Dự đoán: **{pred_label}** — Xác suất Tài (smoothed): {prob:.2%} — {status} (Dynamic threshold: {pred_info['dynamic_threshold']:.3f})")
 
 # Experts & Weights
 with st.expander("3 — Experts & Weights"):
@@ -538,20 +559,24 @@ with st.expander("4 — Micro-patterns & Bias (recent window)"):
     if recent:
         ac1 = autocorr(recent, lag=1)
         alt = alternation_score(recent)
-        st.write(f"Entropy (base2): {pred_info['entropy']:.3f} | Autocorr1: {ac1:.3f} | Alternation: {alt:.3f}")
+        switch = switch_rate(recent)
+        st.write(f"Entropy (base2): {pred_info['entropy']:.3f} | Autocorr1: {ac1:.3f} | Alternation: {alt:.3f} | Switch rate: {switch:.3f}")
         st.write(f"Runs test Z: {pred_info.get('runs_z', 0.0):.3f} (p: {pred_info['runs_p']:.3f})")
         st.write(f"Binomial bias test p: {pred_info['binom_p']:.3f} | Deviation from 50%: {pred_info['binom_dev']:.3f}")
     else:
         st.write("Chưa đủ dữ liệu để tính micro-patterns.")
 
 # Huấn luyện mô hình
+st.sidebar.header("Training")
 if st.sidebar.button("Train Models Now"):
-    if len(st.session_state.history) > window and len(st.session_state.history) % 5 == 0:
+    if len(st.session_state.history) < 20:
+        st.sidebar.warning("Cần ít nhất 20 ván để huấn luyện. Vui lòng nhập thêm dữ liệu.")
+    else:
         with st.spinner("Đang huấn luyện mô hình..."):
             st.session_state.sgd_model, st.session_state.lgbm_model, st.session_state.logistic_model, st.session_state.nb_model = train_models(
                 st.session_state.get("sgd_model"), st.session_state.get("lgbm_model"),
                 st.session_state.get("logistic_model"), st.session_state.get("nb_model"),
-                st.session_state.history + [st.session_state.history[-1]], window
+                st.session_state.history, window
             )
             st.session_state.last_trained = len(st.session_state.history)
             st.success("Huấn luyện hoàn tất!")
@@ -590,7 +615,7 @@ if len(st.session_state.history) >= 2 and len(st.session_state.history) % 5 == 0
         ac1 = autocorr(recent_hist, lag=1)
         alt = alternation_score(recent_hist)
         binom_p, binom_dev = binomial_bias_test(recent_hist)
-        state = [ent_val, streak, pred_info['risk_score'], pred_info['bias_level'], np.mean(losses), ac1, alt]
+        state = [ent_val, streak, pred_info['risk_score'], pred_info['bias_level'], np.mean(losses), ac1, alt, switch_rate(recent_hist)]
         ensemble_cb = combined_predict(st.session_state, tuple(history_before), window=window,
                                       label_smoothing_alpha=label_smoothing_alpha,
                                       risk_threshold=confidence_threshold,
