@@ -601,13 +601,22 @@ else:
 
 # Experts & Weights
 with st.expander("3 — Experts & Weights"):
-    names = st.session_state.meta["names"]
-    cols = st.columns(min(len(names), 9))
+    names = st.session_state.meta.get("names", ["markov", "freq", "wma", "sgd", "lgbm", "bayesian", "logistic", "nb", "catboost"])
+    expert_probs = pred_info.get("expert_probs", [0.5] * len(names))
+    weights = pred_info.get("weights", [1/len(names)] * len(names))
+    num_cols = min(len(names), 9)
+    cols = st.columns(num_cols)
     for i, name in enumerate(names):
-        cols[i % 9].metric(name, f"{pred_info['expert_probs'][i]:.2%}" if i < len(pred_info['expert_probs']) else "N/A")
-    wcols = st.columns(min(len(names), 9))
+        if i < len(expert_probs):
+            cols[i % num_cols].metric(name, f"{expert_probs[i]:.2%}" if expert_probs[i] is not None else "N/A")
+        else:
+            cols[i % num_cols].metric(name, "N/A")
+    wcols = st.columns(num_cols)
     for i, name in enumerate(names):
-        wcols[i % 9].metric(name, f"{pred_info['weights'][i]:.3f}" if i < len(pred_info['weights']) else "N/A")
+        if i < len(weights):
+            wcols[i % num_cols].metric(name, f"{weights[i]:.3f}" if weights[i] is not None else "N/A")
+        else:
+            wcols[i % num_cols].metric(name, "N/A")
 
 # Micro-patterns & Bias
 with st.expander("4 — Micro-patterns & Bias (recent window)"):
