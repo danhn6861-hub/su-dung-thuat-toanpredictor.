@@ -227,6 +227,8 @@ if "window" not in st.session_state:
     st.session_state.window = 7
 if "prev_hash" not in st.session_state:
     st.session_state.prev_hash = ""
+if "force_train" not in st.session_state:
+    st.session_state.force_train = False
 window = st.session_state.window
 
 # Giới hạn history
@@ -274,9 +276,6 @@ else:
     st.info("Chưa có dữ liệu lịch sử.")
 
 # --- Huấn luyện mô hình ---
-if "force_train" not in st.session_state:
-    st.session_state.force_train = False
-
 if len(st.session_state.history) > window and (st.session_state.prev_hash != current_hash or st.session_state.force_train):
     X, y = create_advanced_features(st.session_state.history, window)
     
@@ -374,7 +373,7 @@ if st.session_state.models is not None and len(st.session_state.history) > windo
         fig, ax = plt.subplots(figsize=(10,5))
         ax.plot(rounds, probs_list, color='purple', marker='o', markersize=3, label="Xác suất Tin cậy")
         ax.axhline(0.65, color='red', linestyle='--', label="Ngưỡng Tin Cậy 65%")
-        ax.axhline(0.5, color='gray', linestyle='-', label="Ngưỡng Cơ bản 50%")
+        ax.axhline(0.5, color='gray', linestyle='-', label="Ngưỡng Cơ Bản 50%")
         ax.set_xlabel("Ván chơi")
         ax.set_ylabel("Độ Tin Cậy Dự Đoán")
         ax.set_title("Độ Tin Cậy Dự Đoán qua các Ván")
@@ -383,3 +382,74 @@ if st.session_state.models is not None and len(st.session_state.history) > windo
 else:
     st.info(f"Cần ít nhất {window+1} kết quả để huấn luyện và dự đoán.")
 ```
+
+### Instructions to Fix the Error
+#### 1. **Update `app.py` on Streamlit Cloud**
+- **Problem**: The current `app.py` file on your Streamlit Cloud repository (`/mount/src/tai-xiu-predictor./app.py`) contains invalid Markdown code block markers (````python`).
+- **Solution**:
+  1. Access your GitHub repository (or wherever your Streamlit Cloud app is hosted).
+  2. Open the `app.py` file in the `tai-xiu-predictor` directory.
+  3. Replace its contents with the corrected code above (without ````python` and closing `````).
+  4. Save and commit the changes.
+  5. Go to Streamlit Cloud, click "Manage app" (bottom right), and select "Reboot" to rebuild the app.
+- **Verify**: Check the logs in "Manage app" > Logs to ensure no `SyntaxError`.
+
+#### 2. **Ensure `requirements.txt` is Correct**
+- The `requirements.txt` file from your previous request is correct and includes all dependencies:
+  ```text
+  streamlit>=1.38.0
+  numpy>=1.26.4
+  scikit-learn>=1.5.2
+  xgboost>=2.1.1
+  imblearn>=0.12.3
+  scipy>=1.14.1
+  matplotlib>=3.9.2
+  ```
+- **Action**:
+  - Ensure `requirements.txt` is in the root of your repository (same directory as `app.py`).
+  - If you previously had issues with `xgboost`, add a `packages.txt` file to handle system-level dependencies:
+    ```text
+    g++ build-essential
+    ```
+  - Commit and push both files to your repository, then reboot the app on Streamlit Cloud.
+
+#### 3. **Test Locally First**
+To avoid repeated deployment errors:
+- Save the corrected `app.py` and `requirements.txt` locally.
+- Create a virtual environment:
+  ```bash
+  python -m venv venv
+  source venv/bin/activate  # Linux/Mac
+  venv\Scripts\activate     # Windows
+  ```
+- Install dependencies:
+  ```bash
+  pip install -r requirements.txt
+  ```
+- Run the app:
+  ```bash
+  streamlit run app.py
+  ```
+- Test by adding a few "Tài"/"Xỉu" entries, clicking "Huấn Luyện Mô Hình," and verifying no errors.
+
+#### 4. **Prevent Future Issues**
+- **Avoid Markdown markers**: When copying code from forums, documentation, or responses, ensure you exclude ````python` or similar markers.
+- **Check file before committing**: Open `app.py` in a text editor (e.g., VSCode) to confirm it starts with `import streamlit as st` and has no extra characters.
+- **Use GitHub editor**: If editing on Streamlit Cloud, use the GitHub web editor to update `app.py` directly and verify syntax.
+
+### Additional Notes
+- **Previous `ValueError` Fix**: The code retains all fixes for the previous `ValueError` in `GridSearchCV` (dynamic `n_splits`, data validation, SMOTE handling), so it should handle your ~120-game dataset robustly.
+- **New Buttons**:
+  - **Train Button ("Huấn Luyện Mô Hình")**: Triggers training manually, reducing unnecessary retraining.
+  - **Clear Data Button ("Xóa Toàn Bộ Dữ Liệu")**: Resets all state, confirmed with a success message.
+- **Performance**: The app uses `@st.cache_data` and reduced model complexity (`n_estimators=50/100`, `max_depth=3/5`) to ensure fast execution, even on Streamlit Cloud.
+- **Testing with Data**: If you provide a 120-game history (e.g., a list of "Tài"/"Xỉu"), I can simulate predictions to verify accuracy and check for other potential issues.
+
+### Next Steps
+1. Update `app.py` with the corrected code.
+2. Ensure `requirements.txt` (and `packages.txt` if needed) is in your repository.
+3. Reboot the app on Streamlit Cloud and check logs for errors.
+4. Test locally to confirm functionality.
+5. If the error persists or you encounter new issues, share the full log from Streamlit Cloud or a sample history for further debugging.
+
+Let me know if you need help with deployment or testing!
