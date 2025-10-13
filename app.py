@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import numpy as np
 from sklearn.linear_model import LogisticRegression
@@ -25,11 +26,11 @@ def handle_outliers(window_data):
     
     z_scores = np.abs(zscore(arr, ddof=1))
     median_val = np.median(arr)
-    arr[z_scores > 3] = median_val  # thay thế giá trị siêu nhiễu
+    arr[z_scores > 3] = median_val
     return arr.tolist()
 
 # ------------------------------
-# Hàm tính micro-patterns mới
+# Hàm tính micro-patterns
 # ------------------------------
 def calculate_streaks(binary_seq):
     if not binary_seq:
@@ -72,7 +73,7 @@ def calculate_bias_metrics(binary_seq):
     return var, sk, kur
 
 # ------------------------------
-# 2. Hàm tạo đặc trưng nâng cao (Thêm micro-patterns + bias + feature selection)
+# 2. Hàm tạo đặc trưng nâng cao
 # ------------------------------
 @st.cache_data(hash_funcs={list: lambda x: hashlib.sha256(str(x).encode()).hexdigest()})
 def create_advanced_features(history, window=5):
@@ -103,13 +104,13 @@ def create_advanced_features(history, window=5):
 
     # Feature selection
     if len(X) > 0:
-        selector = SelectKBest(f_classif, k=min(10, X.shape[1]))  # Giữ tối đa 10 features tốt nhất
+        selector = SelectKBest(f_classif, k=min(10, X.shape[1]))
         X = selector.fit_transform(X, y)
 
     return X, y
 
 # ------------------------------
-# 3. Phân tích độ ngẫu nhiên (Thêm micro-patterns + bias)
+# 3. Phân tích độ ngẫu nhiên
 # ------------------------------
 @st.cache_data(hash_funcs={list: lambda x: hashlib.sha256(str(x).encode()).hexdigest()})
 def analyze_randomness_window(history, window=5):
@@ -143,9 +144,9 @@ def analyze_randomness_window(history, window=5):
     return base_status + micro_status + bias_status
 
 # ------------------------------
-# 4. Dự đoán ván tiếp theo (Meta-Ensemble với weights động + adaptive)
+# 4. Dự đoán ván tiếp theo
 # ------------------------------
-def predict_next_ensemble(models, weights, history, window=5, confidence_threshold=0.65):  # Nâng threshold lên 0.65 cho small data
+def predict_next_ensemble(models, weights, history, window=5, confidence_threshold=0.65):
     encode = {"Tài": 1, "Xỉu": 0}
     if len(history) < window or not models:
         return "Chưa đủ dữ liệu", 0.5, "Chưa đủ", np.nan
@@ -167,14 +168,12 @@ def predict_next_ensemble(models, weights, history, window=5, confidence_thresho
     # Adaptive strategy
     adaptive_threshold = confidence_threshold
     if entropy_val > 0.85:
-        adaptive_threshold = 0.70  # Cautious hơn nếu nhiễu cao
-    if kur > 0:  # Peaked, có pattern mạnh -> cautious hơn
         adaptive_threshold = 0.70
-    if entropy_val > 0.85 and abs(sk) < 0.1:  # Siêu nhiễu, skew thấp -> fallback majority
+    if kur > 0:
+        adaptive_threshold = 0.70
+    if entropy_val > 0.85 and abs(sk) < 0.1:
         majority = "Tài" if sum(last_window) > window / 2 else "Xỉu"
         return majority, 0.5, "Fallback do nhiễu cao ⚠️", entropy_val
-    if abs(autocorr) > 0.2:  # Pattern lagged mạnh -> có thể ưu tiên LR/RF
-        pass  # TODO: Ưu tiên weights nếu cần
 
     probs = []
     for model in models:
@@ -198,7 +197,9 @@ def predict_next_ensemble(models, weights, history, window=5, confidence_thresho
 
     return pred, prob, confidence_status, entropy_val
 
-# Hàm tính probs_list cho biểu đồ, cached
+# ------------------------------
+# Hàm tính probs_list cho biểu đồ
+# ------------------------------
 @st.cache_data(hash_funcs={list: lambda x: hashlib.sha256(str(x).encode()).hexdigest()})
 def compute_probs_list(history, window, _models, _weights):
     probs_list = []
@@ -228,22 +229,33 @@ if "prev_hash" not in st.session_state:
     st.session_state.prev_hash = ""
 window = st.session_state.window
 
-# Giới hạn history để tránh chậm nếu quá dài
+# Giới hạn history
 max_history = 1000
 if len(st.session_state.history) > max_history:
     st.session_state.history = st.session_state.history[-max_history:]
 
-# --- Nhập kết quả bằng 2 nút ---
-st.subheader("1. Nhập Kết Quả Ván Chơi")
-col1, col2 = st.columns(2)
+# --- Nhập kết quả và quản lý dữ liệu ---
+st.subheader("1. Nhập Kết Quả Ván Chơi và Quản Lý Dữ Liệu")
+col1, col2, col3, col4 = st.columns(4)
 with col1:
     if st.button("🎯 Tài"):
         st.session_state.history.append("Tài")
 with col2:
     if st.button("🎯 Xỉu"):
         st.session_state.history.append("Xỉu")
+with col3:
+    if st.button("🛠️ Huấn Luyện Mô Hình"):
+        st.session_state.force_train = True
+with col4:
+    if st.button("🗑️ Xóa Toàn Bộ Dữ Liệu"):
+        st.session_state.history = []
+        st.session_state.models = None
+        st.session_state.weights = None
+        st.session_state.prev_hash = ""
+        st.session_state.force_train = False
+        st.success("Đã xóa toàn bộ dữ liệu.")
 
-# Tính hash history để check thay đổi
+# Tính hash history
 def hash_history(hist):
     return hashlib.sha256(str(hist).encode()).hexdigest()
 
@@ -258,73 +270,96 @@ if st.session_state.history:
     count_xiu = st.session_state.history.count("Xỉu")
     total = len(st.session_state.history)
     st.write(f"Tài: {count_tai} ({count_tai/total:.2%}) | Xỉu: {count_xiu} ({count_xiu/total:.2%})")
+else:
+    st.info("Chưa có dữ liệu lịch sử.")
 
-# Chỉ huấn luyện nếu history thay đổi và đủ data
-if len(st.session_state.history) > window and (st.session_state.prev_hash != current_hash):
+# --- Huấn luyện mô hình ---
+if "force_train" not in st.session_state:
+    st.session_state.force_train = False
+
+if len(st.session_state.history) > window and (st.session_state.prev_hash != current_hash or st.session_state.force_train):
     X, y = create_advanced_features(st.session_state.history, window)
     
-    # Xử lý imbalance với SMOTE nếu cần
-    imbalance_ratio = abs(count_tai / total - 0.5)
-    if imbalance_ratio > 0.1 and len(X) > 0:  # Imbalanced
-        smote = SMOTE(random_state=42)
-        X, y = smote.fit_resample(X, y)
-    
-    cv = StratifiedKFold(n_splits=5 if len(X) > 50 else 3)  # Điều chỉnh folds cho small data
-    
-    # Tune và fit models với GridSearchCV
-    # LR
-    param_grid_lr = {'C': [0.1, 0.5, 1, 10]}
-    grid_lr = GridSearchCV(LogisticRegression(solver='liblinear', random_state=42), param_grid_lr, cv=cv)
-    grid_lr.fit(X, y)
-    model_lr = grid_lr.best_estimator_
-    
-    # RF
-    param_grid_rf = {'n_estimators': [50, 100], 'max_depth': [3, 5]}
-    grid_rf = GridSearchCV(RandomForestClassifier(random_state=42), param_grid_rf, cv=cv)
-    grid_rf.fit(X, y)
-    model_rf = grid_rf.best_estimator_
-    
-    # XGB
-    param_grid_xgb = {'n_estimators': [50, 100], 'max_depth': [3, 5]}
-    grid_xgb = GridSearchCV(XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42), param_grid_xgb, cv=cv)
-    grid_xgb.fit(X, y)
-    model_xgb = grid_xgb.best_estimator_
-    
-    # SVM (ít params)
-    model_svm = SVC(probability=True, kernel='rbf', random_state=42).fit(X, y)
-    
-    # MLP
-    param_grid_mlp = {'hidden_layer_sizes': [(20,), (50,)], 'max_iter': [200, 500]}
-    grid_mlp = GridSearchCV(MLPClassifier(random_state=42), param_grid_mlp, cv=cv)
-    grid_mlp.fit(X, y)
-    model_mlp = grid_mlp.best_estimator_
-    
-    st.session_state.models = [model_lr, model_rf, model_xgb, model_svm, model_mlp]
-    
-    # Tính weights dựa trên CV score (best_score_)
-    accs = [grid_lr.best_score_, grid_rf.best_score_, grid_xgb.best_score_, accuracy_score(y, model_svm.predict(X)), grid_mlp.best_score_]
-    st.session_state.weights = np.array(accs) / sum(accs) if sum(accs) > 0 else np.ones(len(accs)) / len(accs)
-    st.info(f"✅ Đã huấn luyện 5 models với {X.shape[0]} mẫu, {X.shape[1]} đặc trưng. Weights: {st.session_state.weights}")
-    
-    # Đánh giá full
-    y_pred_ensemble = np.argmax(np.array([model.predict_proba(X) for model in st.session_state.models]).mean(axis=0), axis=1)
-    cm = confusion_matrix(y, y_pred_ensemble)
-    pr = precision_recall_fscore_support(y, y_pred_ensemble, average='binary')
-    st.write("Confusion Matrix:", cm)
-    st.write(f"Precision: {pr[0]:.2f}, Recall: {pr[1]:.2f}, F1: {pr[2]:.2f}")
+    # Validate data
+    if len(X) < 10 or len(np.unique(y)) < 2:
+        st.error("Dữ liệu quá nhỏ hoặc chỉ có một class. Cần thêm dữ liệu để huấn luyện.")
+    else:
+        # Check class distribution
+        class_counts = np.bincount(y, minlength=2)
+        min_class_count = min(class_counts)
+        n_splits = min(5, len(X), min_class_count) if min_class_count > 0 else 2
+        
+        # Xử lý imbalance với SMOTE nếu cần
+        imbalance_ratio = abs(count_tai / total - 0.5)
+        if imbalance_ratio > 0.1 and len(X) > 10 and min_class_count > 5:
+            try:
+                smote = SMOTE(random_state=42, k_neighbors=min(3, min_class_count-1))
+                X, y = smote.fit_resample(X, y)
+                st.info("Đã áp dụng SMOTE để cân bằng dữ liệu.")
+            except:
+                st.warning("Không thể áp dụng SMOTE do dữ liệu không đủ. Tiếp tục với dữ liệu gốc.")
+        
+        # Cross-validation
+        cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+        
+        # Tune và fit models
+        try:
+            # LR
+            param_grid_lr = {'C': [0.1, 0.5, 1, 10]}
+            grid_lr = GridSearchCV(LogisticRegression(solver='liblinear', random_state=42), param_grid_lr, cv=cv)
+            grid_lr.fit(X, y)
+            model_lr = grid_lr.best_estimator_
+            
+            # RF
+            param_grid_rf = {'n_estimators': [50, 100], 'max_depth': [3, 5]}
+            grid_rf = GridSearchCV(RandomForestClassifier(random_state=42), param_grid_rf, cv=cv)
+            grid_rf.fit(X, y)
+            model_rf = grid_rf.best_estimator_
+            
+            # XGB
+            param_grid_xgb = {'n_estimators': [50, 100], 'max_depth': [3, 5]}
+            grid_xgb = GridSearchCV(XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42), param_grid_xgb, cv=cv)
+            grid_xgb.fit(X, y)
+            model_xgb = grid_xgb.best_estimator_
+            
+            # SVM
+            model_svm = SVC(probability=True, kernel='rbf', random_state=42).fit(X, y)
+            
+            # MLP
+            param_grid_mlp = {'hidden_layer_sizes': [(20,), (50,)], 'max_iter': [200, 500]}
+            grid_mlp = GridSearchCV(MLPClassifier(random_state=42), param_grid_mlp, cv=cv)
+            grid_mlp.fit(X, y)
+            model_mlp = grid_mlp.best_estimator_
+            
+            st.session_state.models = [model_lr, model_rf, model_xgb, model_svm, model_mlp]
+            
+            # Tính weights
+            accs = [grid_lr.best_score_, grid_rf.best_score_, grid_xgb.best_score_, accuracy_score(y, model_svm.predict(X)), grid_mlp.best_score_]
+            st.session_state.weights = np.array(accs) / sum(accs) if sum(accs) > 0 else np.ones(len(accs)) / len(accs)
+            st.info(f"✅ Đã huấn luyện 5 models với {X.shape[0]} mẫu, {X.shape[1]} đặc trưng. Weights: {st.session_state.weights}")
+            
+            # Đánh giá full
+            y_pred_ensemble = np.argmax(np.array([model.predict_proba(X) for model in st.session_state.models]).mean(axis=0), axis=1)
+            cm = confusion_matrix(y, y_pred_ensemble)
+            pr = precision_recall_fscore_support(y, y_pred_ensemble, average='binary')
+            st.write("Confusion Matrix:", cm)
+            st.write(f"Precision: {pr[0]:.2f}, Recall: {pr[1]:.2f}, F1: {pr[2]:.2f}")
+            
+            st.session_state.prev_hash = current_hash
+            st.session_state.force_train = False
+        except Exception as e:
+            st.error(f"Lỗi huấn luyện: {str(e)}. Thử thêm dữ liệu hoặc kiểm tra lại lịch sử.")
 
-    st.session_state.prev_hash = current_hash
-
-# Nếu đã có models, hiển thị dự đoán
+# --- Dự đoán và đánh giá ---
 if st.session_state.models is not None and len(st.session_state.history) > window:
-    # --- Dự đoán ván tiếp theo ---
+    # Dự đoán ván tiếp theo
     st.subheader("3. Dự Đoán Ván Tiếp Theo")
     pred, prob, conf_status, entropy_val = predict_next_ensemble(st.session_state.models, st.session_state.weights, st.session_state.history, window)
     st.markdown(f"**Dự đoán (Meta-Ensemble):** **{pred}** | **Độ tin cậy:** {prob:.2%} | Trạng thái: {conf_status}")
     if pred == "KHÔNG DỰ ĐOÁN":
         st.warning("⚠️ Độ tin cậy thấp. Nên cân nhắc bỏ qua ván này.")
 
-    # --- Đánh giá ván trước ---
+    # Đánh giá ván trước
     if len(st.session_state.history) > window + 1:
         st.subheader("4. Đánh Giá Ván Trước")
         pred_prev, prob_prev, _, _ = predict_next_ensemble(st.session_state.models, st.session_state.weights, st.session_state.history[:-1], window, confidence_threshold=0.0)
@@ -332,7 +367,7 @@ if st.session_state.models is not None and len(st.session_state.history) > windo
         lesson = "Thắng ✅" if last_real == pred_prev else "Thua ❌"
         st.markdown(f"**Kết quả ván trước:** {last_real} | **Dự đoán:** {pred_prev} ({prob_prev:.2%}) | **Bài học:** {lesson}")
 
-        # --- Biểu đồ xác suất ---
+        # Biểu đồ xác suất
         st.subheader("5. Biểu Đồ Xác Suất Dự Đoán")
         probs_list = compute_probs_list(st.session_state.history, window, st.session_state.models, st.session_state.weights)
         rounds = list(range(window+1, len(st.session_state.history)+1))
@@ -347,3 +382,4 @@ if st.session_state.models is not None and len(st.session_state.history) > windo
         st.pyplot(fig)
 else:
     st.info(f"Cần ít nhất {window+1} kết quả để huấn luyện và dự đoán.")
+```
