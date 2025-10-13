@@ -2,6 +2,7 @@ streamlit
 numpy
 scikit-learn
 xgboost
-imblearn
-scipy
+imbalanced-learn
 matplotlib
+scipy
+statsmodels
