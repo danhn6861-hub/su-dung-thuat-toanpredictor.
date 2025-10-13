@@ -1,33 +1,34 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, KFold
 from sklearn.metrics import accuracy_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from xgboost import XGBClassifier
 from catboost import CatBoostClassifier
 from joblib import Parallel, delayed
-from sklearn.model_selection import KFold
 import warnings
 warnings.filterwarnings("ignore")
 
+# ===========================
+# ⚙️ CẤU HÌNH GIAO DIỆN
+# ===========================
 st.set_page_config(page_title="🎲 AI Dự đoán Tài Xỉu Nâng Cao", layout="wide")
-
 st.title("🎲 AI Dự đoán Tài Xỉu Nâng Cao")
-st.markdown("#### ⚙️ Huấn luyện song song 4 mô hình: XGBoost, CatBoost, RandomForest, LogisticRegression")
+st.markdown("#### 🤖 Huấn luyện thông minh + 2 chế độ Ensemble: Weighted Voting & Stacking Meta-Learning")
 st.divider()
 
-# =====================
-# ⚙️ THIẾT LẬP THAM SỐ
-# =====================
-MAX_TRAIN_SAMPLES = 3000  # dữ liệu tối đa để huấn luyện
+# ===========================
+# 🧩 THIẾT LẬP
+# ===========================
+MAX_TRAIN_SAMPLES = 3000
 TEST_SIZE = 0.2
 SEED = 42
 
-# =====================
-# 📊 TẠO DỮ LIỆU GIẢ LẬP (có thể thay bằng dữ liệu thật)
-# =====================
+# ===========================
+# 📊 TẠO DỮ LIỆU GIẢ
+# ===========================
 @st.cache_data
 def create_data(n_samples=MAX_TRAIN_SAMPLES):
     X = np.random.randn(n_samples, 8)
@@ -37,20 +38,20 @@ def create_data(n_samples=MAX_TRAIN_SAMPLES):
 X, y = create_data()
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=TEST_SIZE, random_state=SEED)
 
-# =====================
-# 🧠 KHỞI TẠO CÁC MÔ HÌNH
-# =====================
+# ===========================
+# 🧠 KHỞI TẠO MÔ HÌNH
+# ===========================
 def get_models():
     return {
-        "XGBoost": XGBClassifier(n_estimators=80, max_depth=3, learning_rate=0.1, n_jobs=-1, verbosity=0, random_state=SEED),
-        "CatBoost": CatBoostClassifier(iterations=80, depth=3, learning_rate=0.1, verbose=0, random_state=SEED),
-        "RandomForest": RandomForestClassifier(n_estimators=80, max_depth=5, n_jobs=-1, random_state=SEED),
+        "XGBoost": XGBClassifier(n_estimators=100, max_depth=3, learning_rate=0.1, n_jobs=-1, verbosity=0, random_state=SEED),
+        "CatBoost": CatBoostClassifier(iterations=100, depth=3, learning_rate=0.1, verbose=0, random_state=SEED),
+        "RandomForest": RandomForestClassifier(n_estimators=100, max_depth=5, n_jobs=-1, random_state=SEED),
         "Logistic": LogisticRegression(max_iter=500, solver="lbfgs", random_state=SEED)
     }
 
-# =====================
-# 🚀 HÀM HUẤN LUYỆN SONG SONG
-# =====================
+# ===========================
+# ⚡ HUẤN LUYỆN SONG SONG
+# ===========================
 @st.cache_resource
 def train_all(models, X_train, y_train):
     def train_one(name, model):
@@ -59,28 +60,25 @@ def train_all(models, X_train, y_train):
     results = Parallel(n_jobs=4)(delayed(train_one)(n, m) for n, m in models.items())
     return dict(results)
 
-# =====================
-# 🧩 ENSEMBLE: Weighted Voting
-# =====================
+# ===========================
+# 🧮 WEIGHTED VOTING
+# ===========================
 def weighted_voting(models, X, weights=None):
     base_probs = {}
     for name, model in models.items():
-        probs = model.predict_proba(X)[:, 1]
-        base_probs[name] = probs
-
-    common_keys = list(base_probs.keys())
+        base_probs[name] = model.predict_proba(X)[:, 1]
+    keys = list(base_probs.keys())
     if weights is None:
-        weights = {k: 1.0 / len(common_keys) for k in common_keys}
-
-    combined = np.zeros_like(base_probs[common_keys[0]])
-    for k in common_keys:
+        weights = {k: 1.0 / len(keys) for k in keys}
+    combined = np.zeros_like(base_probs[keys[0]])
+    for k in keys:
         combined += base_probs[k] * weights[k]
     combined /= sum(weights.values())
     return combined
 
-# =====================
-# 🧠 ENSEMBLE: STACKING META LEARNING
-# =====================
+# ===========================
+# 🧠 STACKING META
+# ===========================
 def stacking_meta(models, X_train, y_train, X_test, folds=3):
     kf = KFold(n_splits=folds, shuffle=True, random_state=SEED)
     meta_train = np.zeros((len(X_train), len(models)))
@@ -89,7 +87,6 @@ def stacking_meta(models, X_train, y_train, X_test, folds=3):
     for fold, (train_idx, val_idx) in enumerate(kf.split(X_train)):
         X_tr, X_val = X_train[train_idx], X_train[val_idx]
         y_tr, y_val = y_train[train_idx], y_train[val_idx]
-
         for i, (name, model) in enumerate(models.items()):
             model.fit(X_tr, y_tr)
             meta_train[val_idx, i] = model.predict_proba(X_val)[:, 1]
@@ -99,43 +96,56 @@ def stacking_meta(models, X_train, y_train, X_test, folds=3):
     meta_model.fit(meta_train, y_train)
     return meta_model, meta_model.predict_proba(meta_test)[:, 1]
 
-# =====================
-# 🎛️ GIAO DIỆN HUẤN LUYỆN
-# =====================
-if st.button("🚀 Huấn luyện Mô Hình"):
-    with st.spinner("🔄 Đang huấn luyện 4 mô hình song song..."):
-        models = get_models()
-        trained_models = train_all(models, X_train, y_train)
+# ===========================
+# 🖥️ GIAO DIỆN
+# ===========================
+if "trained_models" not in st.session_state:
+    st.session_state.trained_models = None
+    st.session_state.results = None
 
-        # Tính độ chính xác từng model
-        results = {}
-        for name, model in trained_models.items():
-            preds = model.predict(X_test)
-            acc = accuracy_score(y_test, preds)
-            results[name] = round(acc * 100, 2)
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("🚀 Huấn luyện Mô Hình"):
+        with st.spinner("🔄 Đang huấn luyện 4 mô hình song song..."):
+            models = get_models()
+            trained_models = train_all(models, X_train, y_train)
 
-        st.success("✅ Huấn luyện hoàn tất!")
+            results = {}
+            for name, model in trained_models.items():
+                preds = model.predict(X_test)
+                acc = accuracy_score(y_test, preds)
+                results[name] = round(acc * 100, 2)
 
-        # Voting
-        weights = {k: v / sum(results.values()) for k, v in results.items()}
-        vote_probs = weighted_voting(trained_models, X_test, weights)
-        vote_preds = (vote_probs > 0.5).astype(int)
-        acc_vote = round(accuracy_score(y_test, vote_preds) * 100, 2)
+            st.session_state.trained_models = trained_models
+            st.session_state.results = results
+            st.success("✅ Huấn luyện hoàn tất! Mô hình đã được lưu trong bộ nhớ.")
 
-        # Stacking
-        meta_model, stack_probs = stacking_meta(trained_models, X_train, y_train, X_test)
-        stack_preds = (stack_probs > 0.5).astype(int)
-        acc_stack = round(accuracy_score(y_test, stack_preds) * 100, 2)
+with col2:
+    if st.button("🧮 Dự đoán Ensemble (Voting + Stacking)"):
+        if st.session_state.trained_models is None:
+            st.warning("⚠️ Bạn cần huấn luyện mô hình trước.")
+        else:
+            models = st.session_state.trained_models
+            results = st.session_state.results
 
-        # Hiển thị kết quả
-        st.write("### 📈 Độ chính xác từng mô hình:")
-        st.table(pd.DataFrame.from_dict(results, orient="index", columns=["Accuracy (%)"]))
+            weights = {k: v / sum(results.values()) for k, v in results.items()}
+            vote_probs = weighted_voting(models, X_test, weights)
+            vote_preds = (vote_probs > 0.5).astype(int)
+            acc_vote = round(accuracy_score(y_test, vote_preds) * 100, 2)
 
-        st.markdown(f"### 🧮 Weighted Voting Accuracy: **{acc_vote}%**")
-        st.markdown(f"### 🧠 Stacking Meta-Learning Accuracy: **{acc_stack}%**")
+            meta_model, stack_probs = stacking_meta(models, X_train, y_train, X_test)
+            stack_preds = (stack_probs > 0.5).astype(int)
+            acc_stack = round(accuracy_score(y_test, stack_preds) * 100, 2)
 
-        best_model = max(results, key=results.get)
-        st.markdown(f"🏆 Mô hình đơn tốt nhất: **{best_model}** ({results[best_model]}%)")
+            st.markdown("### 📊 Kết quả Tổng hợp:")
+            df = pd.DataFrame.from_dict(results, orient="index", columns=["Accuracy (%)"])
+            st.table(df)
+            st.markdown(f"**🧮 Weighted Voting Accuracy:** {acc_vote}%")
+            st.markdown(f"**🧠 Stacking Meta-Learning Accuracy:** {acc_stack}%")
+            best_model = max(results, key=results.get)
+            st.markdown(f"🏆 **Mô hình đơn tốt nhất:** {best_model} ({results[best_model]}%)")
 
-else:
-    st.info("👆 Nhấn **Huấn luyện Mô Hình** để bắt đầu.")
+st.info("💡 Tip: Bạn chỉ cần huấn luyện 1 lần. Sau đó có thể chạy nhiều lần dự đoán mà không cần huấn luyện lại.")
+
+if __name__ == "__main__":
+    st.write("")
