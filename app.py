@@ -383,73 +383,75 @@ else:
     st.info(f"Cần ít nhất {window+1} kết quả để huấn luyện và dự đoán.")
 ```
 
-### Instructions to Fix the Error
-#### 1. **Update `app.py` on Streamlit Cloud**
-- **Problem**: The current `app.py` file on your Streamlit Cloud repository (`/mount/src/tai-xiu-predictor./app.py`) contains invalid Markdown code block markers (````python`).
-- **Solution**:
-  1. Access your GitHub repository (or wherever your Streamlit Cloud app is hosted).
-  2. Open the `app.py` file in the `tai-xiu-predictor` directory.
-  3. Replace its contents with the corrected code above (without ````python` and closing `````).
-  4. Save and commit the changes.
-  5. Go to Streamlit Cloud, click "Manage app" (bottom right), and select "Reboot" to rebuild the app.
-- **Verify**: Check the logs in "Manage app" > Logs to ensure no `SyntaxError`.
+### Steps to Fix on Streamlit Cloud
+1. **Update `app.py`**:
+   - Access your GitHub repository linked to Streamlit Cloud (path: `/mount/src/tai-xiu-predictor./app.py`).
+   - Open `app.py` in the GitHub web editor or your local IDE.
+   - Replace the entire content with the corrected code above.
+   - Ensure the file starts with `import streamlit as st` (no ````python` or other markers).
+   - Commit and push the changes to your repository.
 
-#### 2. **Ensure `requirements.txt` is Correct**
-- The `requirements.txt` file from your previous request is correct and includes all dependencies:
-  ```text
-  streamlit>=1.38.0
-  numpy>=1.26.4
-  scikit-learn>=1.5.2
-  xgboost>=2.1.1
-  imblearn>=0.12.3
-  scipy>=1.14.1
-  matplotlib>=3.9.2
-  ```
-- **Action**:
-  - Ensure `requirements.txt` is in the root of your repository (same directory as `app.py`).
-  - If you previously had issues with `xgboost`, add a `packages.txt` file to handle system-level dependencies:
-    ```text
-    g++ build-essential
-    ```
-  - Commit and push both files to your repository, then reboot the app on Streamlit Cloud.
+2. **Verify `requirements.txt`**:
+   - Ensure the following `requirements.txt` is in the root of your repository (same directory as `app.py`):
+     ```text
+     streamlit>=1.38.0
+     numpy>=1.26.4
+     scikit-learn>=1.5.2
+     xgboost>=2.1.1
+     imblearn>=0.12.3
+     scipy>=1.14.1
+     matplotlib>=3.9.2
+     ```
+   - If you previously had issues with `xgboost`, create a `packages.txt` file in the same directory:
+     ```text
+     g++ build-essential
+     ```
+   - Commit and push both files.
 
-#### 3. **Test Locally First**
-To avoid repeated deployment errors:
-- Save the corrected `app.py` and `requirements.txt` locally.
-- Create a virtual environment:
-  ```bash
-  python -m venv venv
-  source venv/bin/activate  # Linux/Mac
-  venv\Scripts\activate     # Windows
-  ```
-- Install dependencies:
-  ```bash
-  pip install -r requirements.txt
-  ```
-- Run the app:
-  ```bash
-  streamlit run app.py
-  ```
-- Test by adding a few "Tài"/"Xỉu" entries, clicking "Huấn Luyện Mô Hình," and verifying no errors.
+3. **Reboot the App**:
+   - Go to Streamlit Cloud, click "Manage app" (bottom right).
+   - Check the logs to confirm the `SyntaxError` details.
+   - Click "Reboot" to rebuild the app with the updated `app.py` and dependencies.
+   - Monitor the logs for any new errors.
 
-#### 4. **Prevent Future Issues**
-- **Avoid Markdown markers**: When copying code from forums, documentation, or responses, ensure you exclude ````python` or similar markers.
-- **Check file before committing**: Open `app.py` in a text editor (e.g., VSCode) to confirm it starts with `import streamlit as st` and has no extra characters.
-- **Use GitHub editor**: If editing on Streamlit Cloud, use the GitHub web editor to update `app.py` directly and verify syntax.
+### Test Locally
+To avoid repeated deployment issues:
+1. Save the corrected `app.py` and `requirements.txt` locally.
+2. Create a virtual environment:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # Linux/Mac
+   venv\Scripts\activate     # Windows
+   ```
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. Run the app:
+   ```bash
+   streamlit run app.py
+   ```
+5. Test by:
+   - Clicking "Tài" or "Xỉu" to add ~10-20 games.
+   - Clicking "Huấn Luyện Mô Hình" to train the models.
+   - Clicking "Xóa Toàn Bộ Dữ Liệu" to reset and verify.
+
+### Prevent Future Issues
+- **Copy Carefully**: When copying code from responses or documentation, exclude Markdown markers (````python`, `````).
+- **Check Syntax**: Before committing, open `app.py` in an editor (e.g., VSCode) and ensure it starts with valid Python code.
+- **Use GitHub Editor**: Edit `app.py` directly on GitHub to avoid copy-paste errors.
+- **Validate Data**: If you have a 120-game history (list of "Tài"/"Xỉu"), share it, and I can simulate to ensure no other errors (e.g., `ValueError` from imbalanced data).
 
 ### Additional Notes
-- **Previous `ValueError` Fix**: The code retains all fixes for the previous `ValueError` in `GridSearchCV` (dynamic `n_splits`, data validation, SMOTE handling), so it should handle your ~120-game dataset robustly.
-- **New Buttons**:
-  - **Train Button ("Huấn Luyện Mô Hình")**: Triggers training manually, reducing unnecessary retraining.
-  - **Clear Data Button ("Xóa Toàn Bộ Dữ Liệu")**: Resets all state, confirmed with a success message.
-- **Performance**: The app uses `@st.cache_data` and reduced model complexity (`n_estimators=50/100`, `max_depth=3/5`) to ensure fast execution, even on Streamlit Cloud.
-- **Testing with Data**: If you provide a 120-game history (e.g., a list of "Tài"/"Xỉu"), I can simulate predictions to verify accuracy and check for other potential issues.
+- **Previous Fixes**: The code includes all prior fixes for `ValueError` (dynamic `n_splits`, SMOTE handling, data validation) and features (Train button, Clear Data button).
+- **Performance**: The app uses `@st.cache_data` and reduced model complexity for fast execution, suitable for ~120 games.
+- **Debugging**: If the `SyntaxError` is fixed but other errors appear (e.g., related to data or dependencies), check Streamlit Cloud logs and share them for further analysis.
 
 ### Next Steps
 1. Update `app.py` with the corrected code.
-2. Ensure `requirements.txt` (and `packages.txt` if needed) is in your repository.
-3. Reboot the app on Streamlit Cloud and check logs for errors.
+2. Ensure `requirements.txt` (and `packages.txt` if needed) is in the repository.
+3. Reboot the app on Streamlit Cloud and check logs.
 4. Test locally to confirm functionality.
-5. If the error persists or you encounter new issues, share the full log from Streamlit Cloud or a sample history for further debugging.
+5. Share any new errors or a 120-game history for further testing.
 
-Let me know if you need help with deployment or testing!
+Let me know if you need assistance with deployment or additional debugging!
