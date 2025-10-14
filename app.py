@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -519,4 +518,3 @@ else:
 # GHI CHÚ CUỐI VÀ TẢI XUỐNG
 st.markdown("---")
 st.info("Lưu ý: Ứng dụng này lưu lịch sử và mô hình tạm thời (ephemeral). Nếu muốn lưu lâu dài, tải file history.csv và mô hình từ thư mục 'models_store' về máy.")
-```
