@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -22,7 +23,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 import warnings
 warnings.filterwarnings("ignore")
 
-# CẤU HÌNH
+# CONFIGURATION
 MIN_GAMES_TO_PREDICT = 60
 WINDOW = 7
 MAX_TRAIN_SAMPLES = 3000
@@ -31,7 +32,7 @@ HISTORY_FILE = "history.csv"
 MODELS_DIR = "models_store"
 os.makedirs(MODELS_DIR, exist_ok=True)
 
-# HÀM TIỆN ÍCH
+# UTILITY FUNCTIONS
 def safe_float_array(lst, length=None, fill=0.0):
     try:
         arr = np.array(lst, dtype=float)
@@ -65,7 +66,7 @@ def load_obj(path):
         pass
     return None
 
-# KỸ THUẬT ĐẶC TRƯNG
+# FEATURE ENGINEERING
 def handle_outliers(window_data):
     try:
         arr = safe_float_array(window_data)
@@ -195,7 +196,7 @@ def create_features(history, window=WINDOW):
             return X, y, None
     return X, y, None
 
-# TĂNG CƯỜNG DỮ LIỆU
+# DATA AUGMENTATION
 @st.cache_data(ttl=3600)
 def augment_data(X, y, factor=3):
     try:
@@ -223,7 +224,7 @@ def augment_data(X, y, factor=3):
     except Exception:
         return X, y
 
-# QUẢN LÝ PHIÊN VÀ LỊCH SỬ
+# SESSION AND HISTORY MANAGEMENT
 if "history" not in st.session_state:
     st.session_state.history = []
 if "models" not in st.session_state:
@@ -255,35 +256,35 @@ def load_history_csv(path=HISTORY_FILE):
 if not st.session_state.history:
     st.session_state.history = load_history_csv()
 
-# GIAO DIỆN NGƯỜI DÙNG: NÚT NHẬP
-st.title("🎲 AI Tài Xỉu — Phiên bản Tối ưu Hóa Tốc độ")
-st.markdown("Nhấn **Tài** / **Xỉu** để lưu ván. Huấn luyện chỉ chạy khi bạn ấn **Huấn luyện Mô Hình**.")
+# USER INTERFACE: INPUT BUTTONS
+st.title("🎲 AI Tài Xỉu — Optimized Speed Version")
+st.markdown("Press **Tài** / **Xỉu** to log a game. Training runs only when you click **Train Model**.")
 
 col1, col2, col3 = st.columns([1, 1, 2])
 with col1:
     if st.button("🎯 Tài"):
         st.session_state.history.append("Tài")
         save_history_csv(st.session_state.history)
-        st.success("Lưu: Tài")
+        st.success("Logged: Tài")
 with col2:
     if st.button("🎯 Xỉu"):
         st.session_state.history.append("Xỉu")
         save_history_csv(st.session_state.history)
-        st.success("Lưu: Xỉu")
+        st.success("Logged: Xỉu")
 with col3:
-    if st.button("🗑️ Xóa lịch sử"):
+    if st.button("🗑️ Clear History"):
         st.session_state.history = []
         save_history_csv([])
-        st.success("Đã xóa lịch sử")
+        st.success("History cleared")
 
-st.markdown("**Lịch sử (mới nhất cuối, hiển thị tối đa 200):**")
+st.markdown("**History (latest at end, max 200 displayed):**")
 st.write(st.session_state.history[-200:])
 
 if st.session_state.history:
     csv = pd.DataFrame({"result": st.session_state.history}).to_csv(index=False).encode("utf-8")
-    st.download_button("📥 Tải lịch sử", data=csv, file_name="history.csv", mime="text/csv")
+    st.download_button("📥 Download History", data=csv, file_name="history.csv", mime="text/csv")
 
-# CƠ SỞ HẠ TẦNG MÔ HÌNH
+# MODEL INFRASTRUCTURE
 class LSTMWrapper(BaseEstimator, ClassifierMixin):
     def __init__(self, units=50, epochs=30):
         self.units = units
@@ -369,42 +370,42 @@ def compute_adaptive_weights(models, X_val, y_val):
         weights = {k: 1.0 / n for k in models}
     return weights
 
-# GIAO DIỆN HUẤN LUYỆN
-st.header("Huấn luyện (chỉ khi bấm)")
+# TRAINING INTERFACE
+st.header("Training (runs only on button press)")
 colA, colB = st.columns(2)
 with colA:
-    if st.button("🛠️ Huấn luyện Mô Hình"):
+    if st.button("🛠️ Train Model"):
         if len(st.session_state.history) < MIN_GAMES_TO_PREDICT:
-            st.warning(f"Cần ít nhất {MIN_GAMES_TO_PREDICT} ván để huấn luyện (hiện {len(st.session_state.history)}).")
+            st.warning(f"Need at least {MIN_GAMES_TO_PREDICT} games to train (currently {len(st.session_state.history)}).")
         else:
-            with st.spinner("Đang tạo đặc trưng và huấn luyện..."):
+            with st.spinner("Generating features and training..."):
                 try:
                     X_all, y_all, selector = create_features(st.session_state.history, WINDOW)
                     st.session_state.selector = selector
                     if X_all.shape[0] < 10 or len(np.unique(y_all)) < 2:
-                        st.error("Dữ liệu không đủ để huấn luyện.")
+                        st.error("Insufficient data for training.")
                     else:
                         X_tr, X_val, y_tr, y_val = train_test_split(X_all, y_all, test_size=0.2, random_state=SEED) if X_all.shape[0] > 10 else (X_all, X_all, y_all, y_all)
                         trained = train_models_parallel(X_tr, y_tr)
                         if not trained:
-                            st.error("Không huấn luyện được model nào.")
+                            st.error("No models trained successfully.")
                         else:
                             st.session_state.models = trained
                             st.session_state.weights = compute_adaptive_weights(trained, X_val, y_val)
-                            st.success("Huấn luyện xong! Models đã lưu vào session với dữ liệu tăng cường.")
+                            st.success("Training complete! Models saved to session with augmented data.")
                             for k, m in trained.items():
                                 save_obj(m, os.path.join(MODELS_DIR, f"{k}.joblib"))
                             if selector is not None:
                                 save_obj(selector, os.path.join(MODELS_DIR, "selector.joblib"))
                             save_obj(st.session_state.weights, os.path.join(MODELS_DIR, "weights.joblib"))
                             st.session_state.trained_hash = hashlib.sha256(str(st.session_state.history).encode()).hexdigest()
-                            st.write("Trọng số thích nghi:", st.session_state.weights)
+                            st.write("Adaptive weights:", st.session_state.weights)
                 except Exception:
-                    st.error("Lỗi khi huấn luyện:")
+                    st.error("Error during training:")
                     st.error(traceback.format_exc())
 
 with colB:
-    if st.button("🔁 Gỡ models (clear)"):
+    if st.button("🔁 Clear Models"):
         st.session_state.models = None
         st.session_state.weights = None
         st.session_state.selector = None
@@ -413,9 +414,9 @@ with colB:
                 os.remove(os.path.join(MODELS_DIR, fname))
         except Exception:
             pass
-        st.success("Đã gỡ models khỏi bộ nhớ.")
+        st.success("Models cleared from memory.")
 
-# TẢI MÔ HÌNH TỪ Ổ
+# LOAD MODELS FROM DISK
 if st.session_state.models is None:
     try:
         loaded = {}
@@ -431,22 +432,22 @@ if st.session_state.models is None:
             sel = load_obj(os.path.join(MODELS_DIR, "selector.joblib"))
             st.session_state.selector = sel if sel is not None else st.session_state.selector
             if st.session_state.models:
-                st.info("Đã tải models từ ổ lưu tạm.")
+                st.info("Loaded models from disk.")
     except Exception:
         pass
 
-# GIAO DIỆN DỰ ĐOÁN
-st.header("Dự đoán ván tiếp theo (dùng models đã huấn luyện)")
+# PREDICTION INTERFACE
+st.header("Predict Next Game (using trained models)")
 if st.session_state.models is None:
-    st.info("Chưa có model. Sau khi huấn luyện (ít nhất 60 ván), bạn có thể dự đoán.")
+    st.info("No models available. Train models after logging at least 60 games.")
 else:
     try:
         if len(st.session_state.history) < WINDOW:
-            st.warning(f"Cần tối thiểu {WINDOW} ván để tạo đặc trưng (hiện {len(st.session_state.history)}).")
+            st.warning(f"Need at least {WINDOW} games for feature generation (currently {len(st.session_state.history)}).")
         else:
             X_feats, y_feats, _ = create_features(st.session_state.history, WINDOW)
             if X_feats.shape[0] < 1:
-                st.error("Không thể tạo đặc trưng cho ván cuối.")
+                st.error("Cannot generate features for the latest game.")
             else:
                 feat = X_feats[-1].reshape(1, -1)
                 base_probs = {}
@@ -462,7 +463,7 @@ else:
                         except Exception:
                             p = 0.5
                     base_probs[k] = float(np.clip(p, 0.0, 1.0))
-                st.write("Xác suất (Tài) từ từng model:", base_probs)
+                st.write("Probabilities (Tài) from each model:", base_probs)
 
                 weights = st.session_state.weights if st.session_state.weights is not None else {k: 1.0 / len(base_probs) for k in base_probs.keys()}
                 keys = [k for k in base_probs.keys() if k in weights]
@@ -473,7 +474,7 @@ else:
                 w_arr = np.array([weights[k] for k in keys])
                 final_prob_tai = float(np.dot(w_arr, probs_arr))
                 pred_vote = "Tài" if final_prob_tai > 0.5 else "Xỉu"
-                st.markdown(f"### Bỏ phiếu (Trọng số Thích nghi): **{pred_vote}** — Xác suất Tài = {final_prob_tai:.2%}")
+                st.markdown(f"### Voting (Adaptive Weights): **{pred_vote}** — Probability Tài = {final_prob_tai:.2%}")
 
                 try:
                     X_meta, y_meta, _ = create_features(st.session_state.history, WINDOW)
@@ -503,18 +504,19 @@ else:
                         meta_input = np.array([base_probs.get(k, 0.5) for k in model_keys]).reshape(1, -1)
                         p_meta = meta_clf.predict_proba(meta_input)[0, 1]
                         pred_meta = "Tài" if p_meta > 0.5 else "Xỉu"
-                        st.markdown(f"### Xếp chồng (Meta Logistic): **{pred_meta}** — Xác suất Tài = {p_meta:.2%}")
+                        st.markdown(f"### Stacking (Meta Logistic): **{pred_meta}** — Probability Tài = {p_meta:.2%}")
                     else:
-                        st.info("Không đủ mẫu để chạy xếp chồng meta đáng tin cậy (cần >=10 mẫu sau cửa sổ).")
+                        st.info("Insufficient samples for reliable meta-stacking (need >=10 samples after window).")
                 except Exception:
-                    st.warning("Xếp chồng meta gặp lỗi; tiếp tục với bỏ phiếu.")
+                    st.warning("Meta-stacking failed; continuing with voting.")
 
                 st.write("---")
-                st.write("Gợi ý: Nếu Bỏ phiếu và Xếp chồng đồng ý, độ tin cậy cao hơn. Nếu không, cân nhắc bỏ qua ván.")
+                st.write("Tip: If Voting and Stacking agree, confidence is higher. If they disagree, consider skipping the game.")
     except Exception:
-        st.error("Lỗi khi dự đoán:")
+        st.error("Error during prediction:")
         st.error(traceback.format_exc())
 
-# GHI CHÚ CUỐI VÀ TẢI XUỐNG
+# FINAL NOTES AND DOWNLOAD
 st.markdown("---")
-st.info("Lưu ý: Ứng dụng này lưu lịch sử và mô hình tạm thời (ephemeral). Nếu muốn lưu lâu dài, tải file history.csv và mô hình từ thư mục 'models_store' về máy.")
+st.info("Note: This app stores history and models temporarily (ephemeral). For persistent storage, download history.csv and models from the 'models_store' directory.")
+```
