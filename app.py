@@ -1,4 +1,4 @@
-
+# app.py
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -6,24 +6,19 @@ import os
 import joblib
 import hashlib
 import traceback
-from joblib import Parallel, delayed
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from xgboost import XGBClassifier
-from catboost import CatBoostClassifier
 from sklearn.model_selection import KFold, train_test_split
 from sklearn.metrics import accuracy_score
 from sklearn.feature_selection import SelectKBest, f_classif
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler
 from scipy.stats import entropy, zscore, skew, kurtosis, norm
 from scipy.fft import fft
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
 from sklearn.base import BaseEstimator, ClassifierMixin
 import warnings
 warnings.filterwarnings("ignore")
 
-# CẤU HÌNH
+# CẤU HÌNH CHUNG
 MIN_GAMES_TO_PREDICT = 60
 WINDOW = 7
 MAX_TRAIN_SAMPLES = 3000
@@ -32,7 +27,7 @@ HISTORY_FILE = "history.csv"
 MODELS_DIR = "models_store"
 os.makedirs(MODELS_DIR, exist_ok=True)
 
-# HÀM TIỆN ÍCH
+# ----- HÀM TIỆN ÍCH -------------------------------------------------------
 def safe_float_array(lst, length=None, fill=0.0):
     try:
         arr = np.array(lst, dtype=float)
@@ -60,13 +55,13 @@ def save_obj(obj, path):
 
 def load_obj(path):
     try:
-        if os.path.exists(path):
-            return joblib.load(path)
+            if os.path.exists(path):
+                return joblib.load(path)
     except Exception:
         pass
     return None
 
-# KỸ THUẬT ĐẶC TRƯNG
+# ----- KỸ THUẬT ĐẶC TRƯNG ------------------------------------------------
 def handle_outliers(window_data):
     try:
         arr = safe_float_array(window_data)
@@ -152,6 +147,7 @@ def runs_test_p(binary_seq):
     except Exception:
         return 1.0
 
+# ----- TẠO ĐẶC TRƯNG -----------------------------------------------------
 @st.cache_data(ttl=3600, max_entries=10)
 def create_features(history, window=WINDOW):
     enc = {"Tài": 1, "Xỉu": 0}
@@ -177,16 +173,23 @@ def create_features(history, window=WINDOW):
         lag1 = w_clean[-1] if len(w_clean) > 0 else 0.0
         lag3 = w_clean[-3] if len(w_clean) > 2 else 0.0
         cep_prob = np.mean(w_clean[-5:]) if len(w_clean) >= 5 else 0.5
-        fft_vals = np.abs(fft(w_clean))[:window // 2]
-        fft_norm = MinMaxScaler().fit_transform(fft_vals.reshape(-1, 1)).flatten().tolist()
+
+        # FFT features (take up to window//2 values, then scale)
+        try:
+            fft_vals = np.abs(fft(w_clean))[: max(1, window // 2)]
+            fft_norm = MinMaxScaler().fit_transform(fft_vals.reshape(-1, 1)).flatten().tolist()
+        except Exception:
+            fft_norm = [0.0] * max(1, window // 2)
 
         feats = list(w_clean) + [ent, momentum, streaks, altern, autoc, var, sk, kur, p_runs, lag1, lag3, roll_mean, roll_std, cep_prob] + fft_norm
         X.append(feats)
         y.append(hist_num[i])
-    X = np.array(X, dtype=float) if X else np.empty((0, window + 14 + len(fft_norm)), dtype=float)
-    y = np.array(y, dtype=int) if y else np.empty((0,), dtype=int)
-    selector = None
-    if X.shape[0] > 0:
+
+    # ensure consistent shape even if empty
+    if X:
+        X = np.array(X, dtype=float)
+        y = np.array(y, dtype=int)
+        selector = None
         try:
             k = min(12, X.shape[1])
             selector = SelectKBest(f_classif, k=k)
@@ -194,37 +197,45 @@ def create_features(history, window=WINDOW):
             return Xt, y, selector
         except Exception:
             return X, y, None
-    return X, y, None
+    else:
+        return np.empty((0, 0)), np.empty((0,)), None
 
-# TĂNG CƯỜNG DỮ LIỆU
-@st.cache_data(ttl=3600)
+# ----- TĂNG CƯỜNG DỮ LIỆU -------------------------------------------------
 def augment_data(X, y, factor=3):
     try:
+        if X is None or X.shape[0] == 0:
+            return X, y
         augmented_X, augmented_y = list(X), list(y)
         for i in range(X.shape[0]):
             for _ in range(factor - 1):
                 sample = X[i].copy()
                 noise = np.random.normal(0, 0.05, sample.shape)
-                sample += noise
+                sample = sample + noise
                 sample = np.clip(sample, 0, 1)
 
                 scale = np.random.normal(1, 0.1)
-                sample *= scale
+                sample = sample * scale
                 sample = np.clip(sample, 0, 1)
 
-                warp_factor = np.random.choice([0.5, 2.0])
-                warp_start = np.random.randint(0, len(sample) // 2)
-                warp_len = np.random.randint(3, len(sample) // 4)
-                warped_slice = np.interp(np.linspace(0, warp_len, int(warp_len * warp_factor)), np.arange(warp_len), sample[warp_start:warp_start + warp_len])
-                sample = np.concatenate([sample[:warp_start], warped_slice, sample[warp_start + warp_len:]])[:len(sample)]
-                
+                # warp safely if possible
+                if len(sample) >= 8:
+                    warp_factor = np.random.choice([0.5, 2.0])
+                    warp_start = np.random.randint(0, max(1, len(sample) // 2))
+                    warp_len = np.random.randint(3, max(3, len(sample) // 4))
+                    try:
+                        warped_slice = np.interp(np.linspace(0, warp_len, int(max(1, warp_len * warp_factor))),
+                                                 np.arange(warp_len), sample[warp_start:warp_start + warp_len])
+                        sample = np.concatenate([sample[:warp_start], warped_slice, sample[warp_start + warp_len:]])[:len(sample)]
+                    except Exception:
+                        pass
+
                 augmented_X.append(sample)
                 augmented_y.append(y[i])
         return np.array(augmented_X), np.array(augmented_y)
     except Exception:
         return X, y
 
-# QUẢN LÝ PHIÊN VÀ LỊCH SỬ
+# ----- QUẢN LÝ SESSION / LỊCH SỬ ------------------------------------------
 if "history" not in st.session_state:
     st.session_state.history = []
 if "models" not in st.session_state:
@@ -256,8 +267,8 @@ def load_history_csv(path=HISTORY_FILE):
 if not st.session_state.history:
     st.session_state.history = load_history_csv()
 
-# GIAO DIỆN NGƯỜI DÙNG: NÚT NHẬP
-st.title("🎲 AI Tài Xỉu — Phiên bản Tối ưu Hóa Tốc độ")
+# ----- UI: NHẬP KẾT QUẢ ---------------------------------------------------
+st.title("🎲 AI Tài Xỉu — Phiên bản Tối ưu Hóa Ổn Định")
 st.markdown("Nhấn **Tài** / **Xỉu** để lưu ván. Huấn luyện chỉ chạy khi bạn ấn **Huấn luyện Mô Hình**.")
 
 col1, col2, col3 = st.columns([1, 1, 2])
@@ -284,73 +295,131 @@ if st.session_state.history:
     csv = pd.DataFrame({"result": st.session_state.history}).to_csv(index=False).encode("utf-8")
     st.download_button("📥 Tải lịch sử", data=csv, file_name="history.csv", mime="text/csv")
 
-# CƠ SỞ HẠ TẦNG MÔ HÌNH
+# ----- LỚP LSTM (đã sửa để trả proba 2 cột) ------------------------------
 class LSTMWrapper(BaseEstimator, ClassifierMixin):
-    def __init__(self, units=50, epochs=30):
+    def __init__(self, units=20, epochs=10, batch_size=16):
         self.units = units
         self.epochs = epochs
-    def fit(self, X, y):
-        X_reshaped = X.reshape((X.shape[0], X.shape[1], 1))
-        self.model = Sequential([LSTM(self.units, input_shape=(X.shape[1], 1)), Dense(1, activation='sigmoid')])
-        self.model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
-        self.model.fit(X_reshaped, y, epochs=self.epochs, verbose=0)
-        return self
-    def predict_proba(self, X):
-        X_reshaped = X.reshape((X.shape[0], X.shape[1], 1))
-        return self.model.predict(X_reshaped, verbose=0)
-    def predict(self, X):
-        return (self.predict_proba(X) > 0.5).astype(int)
+        self.batch_size = batch_size
+        self._is_fitted = False
 
+    def fit(self, X, y):
+        # lazy import tensorflow to avoid import cost at module load
+        try:
+            from tensorflow.keras.models import Sequential
+            from tensorflow.keras.layers import LSTM, Dense
+        except Exception as e:
+            # if tensorflow not available, just mark as not fitted and return
+            self._is_fitted = False
+            return self
+
+        X_reshaped = X.reshape((X.shape[0], X.shape[1], 1))
+        self.model = Sequential([
+            LSTM(self.units, input_shape=(X.shape[1], 1)),
+            Dense(1, activation='sigmoid')
+        ])
+        self.model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+        try:
+            self.model.fit(X_reshaped, y, epochs=self.epochs, batch_size=self.batch_size, verbose=0)
+            self._is_fitted = True
+        except Exception:
+            self._is_fitted = False
+        return self
+
+    def predict_proba(self, X):
+        n = X.shape[0]
+        if not getattr(self, "_is_fitted", False):
+            return np.vstack([np.full(n, 0.5), np.full(n, 0.5)]).T
+        X_reshaped = X.reshape((X.shape[0], X.shape[1], 1))
+        preds = self.model.predict(X_reshaped, verbose=0).reshape(-1)
+        p1 = np.clip(preds, 0.0, 1.0)
+        p0 = 1.0 - p1
+        return np.vstack([p0, p1]).T
+
+    def predict(self, X):
+        probs = self.predict_proba(X)
+        return (probs[:, 1] > 0.5).astype(int)
+
+# ----- ĐỊNH NGHĨA BASE MODELS (lazy import) -------------------------------
 @st.cache_resource(ttl=3600)
 def base_model_defs():
+    # create lightweight defaults; heavy libs will be imported lazily in fit_single if available
     return {
-        "xgb": XGBClassifier(n_estimators=30, max_depth=2, learning_rate=0.05, n_jobs=1, verbosity=0, random_state=SEED),
-        "cat": CatBoostClassifier(iterations=40, depth=2, learning_rate=0.05, verbose=0, random_state=SEED),
         "rf": RandomForestClassifier(n_estimators=40, max_depth=4, n_jobs=1, random_state=SEED),
         "lr": LogisticRegression(max_iter=200, solver='lbfgs', random_state=SEED),
-        "lstm": LSTMWrapper(units=50, epochs=30)
+        "lstm": LSTMWrapper(units=20, epochs=8)
+        # xgb/cat sẽ được thử khi import thành công trong fit_single
     }
 
+# ----- HÀM fit_single (bắt lỗi và fallback nhẹ) -------------------------
 def fit_single(key, model, X, y):
     try:
         model.fit(X, y)
         return key, model, True
     except Exception:
+        # Fallbacks: try to use lighter variants if heavy libs missing or fit fails
         try:
             if key == "xgb":
-                m = XGBClassifier(n_estimators=20, max_depth=1, n_jobs=1, verbosity=0, random_state=SEED)
-                m.fit(X, y)
-                return key, m, True
+                try:
+                    from xgboost import XGBClassifier
+                    m = XGBClassifier(n_estimators=10, max_depth=1, n_jobs=1, verbosity=0, random_state=SEED)
+                    m.fit(X, y)
+                    return key, m, True
+                except Exception:
+                    return key, None, False
             if key == "cat":
-                m = CatBoostClassifier(iterations=20, depth=1, verbose=0, random_state=SEED)
-                m.fit(X, y)
-                return key, m, True
+                try:
+                    from catboost import CatBoostClassifier
+                    m = CatBoostClassifier(iterations=20, depth=2, learning_rate=0.05, verbose=0, random_state=SEED)
+                    m.fit(X, y)
+                    return key, m, True
+                except Exception:
+                    return key, None, False
             if key == "rf":
-                m = RandomForestClassifier(n_estimators=20, max_depth=2, n_jobs=1, random_state=SEED)
+                m = RandomForestClassifier(n_estimators=20, max_depth=3, n_jobs=1, random_state=SEED)
                 m.fit(X, y)
                 return key, m, True
             if key == "lr":
-                m = LogisticRegression(max_iter=100, solver='liblinear', random_state=SEED)
+                m = LogisticRegression(max_iter=150, solver='liblinear', random_state=SEED)
                 m.fit(X, y)
                 return key, m, True
             if key == "lstm":
-                m = LSTMWrapper(units=20, epochs=10)
+                m = LSTMWrapper(units=10, epochs=5)
                 m.fit(X, y)
                 return key, m, True
         except Exception:
             return key, None, False
     return key, None, False
 
+# ----- Huấn luyện các models (tuần tự để tránh spawn nhiều process) -----
 def train_models_parallel(X, y):
+    # hạn chế số mẫu
     if X.shape[0] > MAX_TRAIN_SAMPLES:
         X = X[-MAX_TRAIN_SAMPLES:]
         y = y[-MAX_TRAIN_SAMPLES:]
+    # data augmentation
     X_aug, y_aug = augment_data(X, y)
     defs = base_model_defs()
-    results = Parallel(n_jobs=-1)(delayed(fit_single)(k, m, X_aug, y_aug) for k, m in defs.items())
-    trained = {k: m for k, m, ok in results if ok and m is not None}
+    # optionally try adding xgb/cat if available
+    try:
+        from xgboost import XGBClassifier  # noqa: F401
+        defs["xgb"] = XGBClassifier(n_estimators=20, max_depth=2, learning_rate=0.05, n_jobs=1, verbosity=0, random_state=SEED)
+    except Exception:
+        pass
+    try:
+        from catboost import CatBoostClassifier  # noqa: F401
+        defs["cat"] = CatBoostClassifier(iterations=30, depth=2, learning_rate=0.05, verbose=0, random_state=SEED)
+    except Exception:
+        pass
+
+    trained = {}
+    for k, m in defs.items():
+        key, model, ok = fit_single(k, m, X_aug, y_aug)
+        if ok and model is not None:
+            trained[key] = model
     return trained
 
+# ----- Tính trọng số adaptive ------------------------------------------------
 def compute_adaptive_weights(models, X_val, y_val):
     weights = {}
     try:
@@ -358,19 +427,52 @@ def compute_adaptive_weights(models, X_val, y_val):
         keys = list(models.keys())
         for k in keys:
             try:
-                p = models[k].predict(X_val)
-                acc = accuracy_score(y_val, p)
+                p = safe_predict_proba_scalar(models[k], X_val)
+                # p is array of probabilities for class 1
+                acc = accuracy_score(y_val, (p > 0.5).astype(int))
             except Exception:
                 acc = 0.0
             scores.append(max(acc, 1e-6))
         arr = np.array(scores, dtype=float)
         weights = {k: float(v / arr.sum()) for k, v in zip(keys, arr)}
     except Exception:
-        n = len(models)
-        weights = {k: 1.0 / n for k in models}
+        n = len(models) if models else 1
+        weights = {k: 1.0 / n for k in models} if models else {}
     return weights
 
-# GIAO DIỆN HUẤN LUYỆN
+# ----- HÀM CHUẨN HÓA KẾT QUẢ MODEL (proba scalar cho class=1) -------------
+def safe_predict_proba_scalar(model, X):
+    """
+    Trả về 1D array (n,) là xác suất thuộc class=1.
+    Hỗ trợ: predict_proba, decision_function, predict.
+    """
+    n = X.shape[0]
+    try:
+        if hasattr(model, "predict_proba"):
+            P = model.predict_proba(X)
+            # nhiều lib trả (n,2) hoặc (n,1)
+            if P.ndim == 2 and P.shape[1] >= 2:
+                return np.clip(P[:, 1].astype(float), 0.0, 1.0)
+            elif P.ndim == 2 and P.shape[1] == 1:
+                p1 = P[:, 0]
+                return np.clip(p1, 0.0, 1.0)
+            else:
+                return np.full(n, 0.5)
+        elif hasattr(model, "decision_function"):
+            df = model.decision_function(X)
+            df = np.array(df).reshape(-1)
+            p = 1.0 / (1.0 + np.exp(-df))
+            return np.clip(p, 0.0, 1.0)
+        elif hasattr(model, "predict"):
+            preds = model.predict(X)
+            preds = np.array(preds).reshape(-1)
+            # nếu preds chỉ 0/1, trả 0/1
+            return np.clip(preds.astype(float), 0.0, 1.0)
+    except Exception:
+        pass
+    return np.full(n, 0.5)
+
+# ----- UI: HUẤN LUYỆN -----------------------------------------------------
 st.header("Huấn luyện (chỉ khi bấm)")
 colA, colB = st.columns(2)
 with colA:
@@ -382,7 +484,7 @@ with colA:
                 try:
                     X_all, y_all, selector = create_features(st.session_state.history, WINDOW)
                     st.session_state.selector = selector
-                    if X_all.shape[0] < 10 or len(np.unique(y_all)) < 2:
+                    if X_all is None or X_all.shape[0] < 10 or len(np.unique(y_all)) < 2:
                         st.error("Dữ liệu không đủ để huấn luyện.")
                     else:
                         X_tr, X_val, y_tr, y_val = train_test_split(X_all, y_all, test_size=0.2, random_state=SEED) if X_all.shape[0] > 10 else (X_all, X_all, y_all, y_all)
@@ -392,9 +494,12 @@ with colA:
                         else:
                             st.session_state.models = trained
                             st.session_state.weights = compute_adaptive_weights(trained, X_val, y_val)
-                            st.success("Huấn luyện xong! Models đã lưu vào session với dữ liệu tăng cường.")
+                            st.success("Huấn luyện xong! Models đã lưu vào session.")
                             for k, m in trained.items():
-                                save_obj(m, os.path.join(MODELS_DIR, f"{k}.joblib"))
+                                try:
+                                    save_obj(m, os.path.join(MODELS_DIR, f"{k}.joblib"))
+                                except Exception:
+                                    pass
                             if selector is not None:
                                 save_obj(selector, os.path.join(MODELS_DIR, "selector.joblib"))
                             save_obj(st.session_state.weights, os.path.join(MODELS_DIR, "weights.joblib"))
@@ -411,12 +516,15 @@ with colB:
         st.session_state.selector = None
         try:
             for fname in os.listdir(MODELS_DIR):
-                os.remove(os.path.join(MODELS_DIR, fname))
+                try:
+                    os.remove(os.path.join(MODELS_DIR, fname))
+                except Exception:
+                    pass
         except Exception:
             pass
         st.success("Đã gỡ models khỏi bộ nhớ.")
 
-# TẢI MÔ HÌNH TỪ Ổ
+# ----- TẢI MODEL TỪ Ổ (nếu có) --------------------------------------------
 if st.session_state.models is None:
     try:
         loaded = {}
@@ -424,7 +532,9 @@ if st.session_state.models is None:
             if fname.endswith(".joblib"):
                 key = fname.replace(".joblib", "")
                 if key in ("xgb", "cat", "rf", "lr", "lstm"):
-                    loaded[key] = load_obj(os.path.join(MODELS_DIR, fname))
+                    obj = load_obj(os.path.join(MODELS_DIR, fname))
+                    if obj is not None:
+                        loaded[key] = obj
         if loaded:
             st.session_state.models = loaded
             w = load_obj(os.path.join(MODELS_DIR, "weights.joblib"))
@@ -436,7 +546,7 @@ if st.session_state.models is None:
     except Exception:
         pass
 
-# GIAO DIỆN DỰ ĐOÁN
+# ----- GIAO DIỆN DỰ ĐOÁN -------------------------------------------------
 st.header("Dự đoán ván tiếp theo (dùng models đã huấn luyện)")
 if st.session_state.models is None:
     st.info("Chưa có model. Sau khi huấn luyện (ít nhất 60 ván), bạn có thể dự đoán.")
@@ -446,23 +556,20 @@ else:
             st.warning(f"Cần tối thiểu {WINDOW} ván để tạo đặc trưng (hiện {len(st.session_state.history)}).")
         else:
             X_feats, y_feats, _ = create_features(st.session_state.history, WINDOW)
-            if X_feats.shape[0] < 1:
+            if X_feats is None or X_feats.shape[0] < 1:
                 st.error("Không thể tạo đặc trưng cho ván cuối.")
             else:
                 feat = X_feats[-1].reshape(1, -1)
+
                 base_probs = {}
                 for k, m in st.session_state.models.items():
                     try:
-                        p = m.predict_proba(feat)[0][1]
+                        p_arr = safe_predict_proba_scalar(m, feat)
+                        p = float(np.clip(p_arr.reshape(-1)[0], 0.0, 1.0))
                     except Exception:
-                        try:
-                            df = m.decision_function(feat)
-                            if np.isscalar(df):
-                                df = np.array([df])
-                            p = 1.0 / (1.0 + np.exp(-float(df[0])))
-                        except Exception:
-                            p = 0.5
-                    base_probs[k] = float(np.clip(p, 0.0, 1.0))
+                        p = 0.5
+                    base_probs[k] = p
+
                 st.write("Xác suất (Tài) từ từng model:", base_probs)
 
                 weights = st.session_state.weights if st.session_state.weights is not None else {k: 1.0 / len(base_probs) for k in base_probs.keys()}
@@ -476,26 +583,30 @@ else:
                 pred_vote = "Tài" if final_prob_tai > 0.5 else "Xỉu"
                 st.markdown(f"### Bỏ phiếu (Trọng số Thích nghi): **{pred_vote}** — Xác suất Tài = {final_prob_tai:.2%}")
 
+                # stacking meta (nếu có đủ dữ liệu)
                 try:
                     X_meta, y_meta, _ = create_features(st.session_state.history, WINDOW)
                     if X_meta.shape[0] >= 10:
                         model_keys = list(st.session_state.models.keys())
                         meta_train = np.zeros((X_meta.shape[0], len(model_keys)))
-                        kf = KFold(n_splits=min(3, max(2, X_meta.shape[0] // 10)), shuffle=True, random_state=SEED)
+                        n_splits = min(3, max(2, X_meta.shape[0] // 10))
+                        kf = KFold(n_splits=n_splits, shuffle=True, random_state=SEED)
                         for i, key in enumerate(model_keys):
                             m = st.session_state.models[key]
-                            oof = np.zeros(X_meta.shape[0])
+                            oof = np.full(X_meta.shape[0], 0.5)
                             for train_idx, val_idx in kf.split(X_meta):
                                 try:
-                                    clone = m.__class__(**{k: v for k, v in getattr(m, 'get_params', lambda: {})().items()}) if hasattr(m, 'get_params') else m
-                                    clone.fit(X_meta[train_idx], y_meta[train_idx])
-                                    if hasattr(clone, 'predict_proba'):
-                                        oof[val_idx] = clone.predict_proba(X_meta[val_idx])[:, 1]
-                                    elif hasattr(clone, 'decision_function'):
-                                        df = clone.decision_function(X_meta[val_idx])
-                                        oof[val_idx] = 1.0 / (1.0 + np.exp(-df))
+                                    # create a fresh copy if possible
+                                    if hasattr(m, "get_params"):
+                                        params = m.get_params()
+                                        cls = m.__class__
+                                        clone = cls(**params)
+                                        clone.fit(X_meta[train_idx], y_meta[train_idx])
                                     else:
-                                        oof[val_idx] = clone.predict(X_meta[val_idx])
+                                        clone = m
+                                        clone.fit(X_meta[train_idx], y_meta[train_idx])
+                                    p_val = safe_predict_proba_scalar(clone, X_meta[val_idx])
+                                    oof[val_idx] = p_val
                                 except Exception:
                                     oof[val_idx] = 0.5
                             meta_train[:, i] = oof
