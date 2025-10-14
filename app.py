@@ -188,7 +188,7 @@ def create_features(history, window=WINDOW):
     selector = None
     if X.shape[0] > 0:
         try:
-            k = min(12, X.shape[1])  # Giảm k để tăng tốc
+            k = min(12, X.shape[1])
             selector = SelectKBest(f_classif, k=k)
             Xt = selector.fit_transform(X, y)
             return Xt, y, selector
@@ -347,7 +347,7 @@ def train_models_parallel(X, y):
         y = y[-MAX_TRAIN_SAMPLES:]
     X_aug, y_aug = augment_data(X, y)
     defs = base_model_defs()
-    results = Parallel(n_jobs=-1)(delayed(fit_single)(k, m, X_aug, y_aug) for k, m in defs.items())  # Tăng n_jobs
+    results = Parallel(n_jobs=-1)(delayed(fit_single)(k, m, X_aug, y_aug) for k, m in defs.items())
     trained = {k: m for k, m, ok in results if ok and m is not None}
     return trained
 
