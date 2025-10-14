@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -32,7 +33,6 @@ MODELS_DIR = "models_store"
 os.makedirs(MODELS_DIR, exist_ok=True)
 
 # HÀM TIỆN ÍCH
-
 def safe_float_array(lst, length=None, fill=0.0):
     try:
         arr = np.array(lst, dtype=float)
@@ -66,8 +66,7 @@ def load_obj(path):
         pass
     return None
 
-# KỸ THUẬT ĐẶC TRƯNG (tối ưu với bộ nhớ đệm)
-
+# KỸ THUẬT ĐẶC TRƯNG
 def handle_outliers(window_data):
     try:
         arr = safe_float_array(window_data)
@@ -175,26 +174,21 @@ def create_features(history, window=WINDOW):
         df_w = pd.Series(w_clean)
         roll_mean = df_w.rolling(3).mean().iloc[-1] if len(df_w) >= 3 else 0.0
         roll_std = df_w.rolling(3).std().iloc[-1] if len(df_w) >= 3 else 0.0
-        exp_min = df_w.expanding().min().iloc[-1]
-        exp_max = df_w.expanding().max().iloc[-1]
+        lag1 = w_clean[-1] if len(w_clean) > 0 else 0.0
+        lag3 = w_clean[-3] if len(w_clean) > 2 else 0.0
         cep_prob = np.mean(w_clean[-5:]) if len(w_clean) >= 5 else 0.5
         fft_vals = np.abs(fft(w_clean))[:window // 2]
         fft_norm = MinMaxScaler().fit_transform(fft_vals.reshape(-1, 1)).flatten().tolist()
-        trans_00 = sum(1 for j in range(1, len(w_clean)) if w_clean[j-1] == 0 and w_clean[j] == 0) / max(1, sum(1 for x in w_clean[:-1] if x == 0))
-        trans_11 = sum(1 for j in range(1, len(w_clean)) if w_clean[j-1] == 1 and w_clean[j] == 1) / max(1, sum(1 for x in w_clean[:-1] if x == 1))
 
-        lag1 = w_clean[-1] if len(w_clean) > 0 else 0.0
-        lag3 = w_clean[-3] if len(w_clean) > 2 else 0.0
-        new_feats = [lag1, lag3, roll_mean, roll_std, exp_min, exp_max, cep_prob, trans_00, trans_11] + fft_norm
-        feats = list(w_clean) + [ent, momentum, streaks, altern, autoc, var, sk, kur, p_runs] + new_feats
+        feats = list(w_clean) + [ent, momentum, streaks, altern, autoc, var, sk, kur, p_runs, lag1, lag3, roll_mean, roll_std, cep_prob] + fft_norm
         X.append(feats)
         y.append(hist_num[i])
-    X = np.array(X, dtype=float) if X else np.empty((0, window + 11 + len(fft_norm)), dtype=float)
+    X = np.array(X, dtype=float) if X else np.empty((0, window + 14 + len(fft_norm)), dtype=float)
     y = np.array(y, dtype=int) if y else np.empty((0,), dtype=int)
     selector = None
     if X.shape[0] > 0:
         try:
-            k = min(15, X.shape[1])
+            k = min(12, X.shape[1])  # Giảm k để tăng tốc
             selector = SelectKBest(f_classif, k=k)
             Xt = selector.fit_transform(X, y)
             return Xt, y, selector
@@ -202,8 +196,7 @@ def create_features(history, window=WINDOW):
             return X, y, None
     return X, y, None
 
-# TĂNG CƯỜNG DỮ LIỆU (nâng cao cho chuỗi thời gian)
-
+# TĂNG CƯỜNG DỮ LIỆU
 @st.cache_data(ttl=3600)
 def augment_data(X, y, factor=3):
     try:
@@ -232,7 +225,6 @@ def augment_data(X, y, factor=3):
         return X, y
 
 # QUẢN LÝ PHIÊN VÀ LỊCH SỬ
-
 if "history" not in st.session_state:
     st.session_state.history = []
 if "models" not in st.session_state:
@@ -261,12 +253,11 @@ def load_history_csv(path=HISTORY_FILE):
         pass
     return []
 
-if not st.session_state history:
+if not st.session_state.history:
     st.session_state.history = load_history_csv()
 
 # GIAO DIỆN NGƯỜI DÙNG: NÚT NHẬP
-
-st.title("🎲 AI Tài Xỉu — Phiên bản Tối ưu Hóa")
+st.title("🎲 AI Tài Xỉu — Phiên bản Tối ưu Hóa Tốc độ")
 st.markdown("Nhấn **Tài** / **Xỉu** để lưu ván. Huấn luyện chỉ chạy khi bạn ấn **Huấn luyện Mô Hình**.")
 
 col1, col2, col3 = st.columns([1, 1, 2])
@@ -293,8 +284,7 @@ if st.session_state.history:
     csv = pd.DataFrame({"result": st.session_state.history}).to_csv(index=False).encode("utf-8")
     st.download_button("📥 Tải lịch sử", data=csv, file_name="history.csv", mime="text/csv")
 
-# CƠ SỞ HẠ TẦNG MÔ HÌNH (đơn giản hóa tham số, có bộ nhớ đệm)
-
+# CƠ SỞ HẠ TẦNG MÔ HÌNH
 class LSTMWrapper(BaseEstimator, ClassifierMixin):
     def __init__(self, units=50, epochs=30):
         self.units = units
@@ -357,7 +347,7 @@ def train_models_parallel(X, y):
         y = y[-MAX_TRAIN_SAMPLES:]
     X_aug, y_aug = augment_data(X, y)
     defs = base_model_defs()
-    results = Parallel(n_jobs=2)(delayed(fit_single)(k, m, X_aug, y_aug) for k, m in defs.items())
+    results = Parallel(n_jobs=-1)(delayed(fit_single)(k, m, X_aug, y_aug) for k, m in defs.items())  # Tăng n_jobs
     trained = {k: m for k, m, ok in results if ok and m is not None}
     return trained
 
@@ -381,7 +371,6 @@ def compute_adaptive_weights(models, X_val, y_val):
     return weights
 
 # GIAO DIỆN HUẤN LUYỆN
-
 st.header("Huấn luyện (chỉ khi bấm)")
 colA, colB = st.columns(2)
 with colA:
@@ -428,7 +417,6 @@ with colB:
         st.success("Đã gỡ models khỏi bộ nhớ.")
 
 # TẢI MÔ HÌNH TỪ Ổ
-
 if st.session_state.models is None:
     try:
         loaded = {}
@@ -449,7 +437,6 @@ if st.session_state.models is None:
         pass
 
 # GIAO DIỆN DỰ ĐOÁN
-
 st.header("Dự đoán ván tiếp theo (dùng models đã huấn luyện)")
 if st.session_state.models is None:
     st.info("Chưa có model. Sau khi huấn luyện (ít nhất 60 ván), bạn có thể dự đoán.")
@@ -530,6 +517,6 @@ else:
         st.error(traceback.format_exc())
 
 # GHI CHÚ CUỐI VÀ TẢI XUỐNG
-
 st.markdown("---")
 st.info("Lưu ý: Ứng dụng này lưu lịch sử và mô hình tạm thời (ephemeral). Nếu muốn lưu lâu dài, tải file history.csv và mô hình từ thư mục 'models_store' về máy.")
+```
