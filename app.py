@@ -4,33 +4,32 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegressionCV, LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, VotingClassifier, StackingClassifier
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.model_selection import TimeSeriesSplit, train_test_split
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import accuracy_score, brier_score_loss
-import matplotlib.pyplot as plt
 from datetime import datetime
+import matplotlib.pyplot as plt
 import joblib
 import io
 import os
 
-# XGBoost optional
+# ====== Optional: XGBoost ======
 try:
     from xgboost import XGBClassifier
     HAS_XGB = True
 except Exception:
     HAS_XGB = False
 
-# ====== Streamlit Page Config ======
+# ====== Streamlit Config ======
 st.set_page_config(page_title="AI Dự đoán Tài/Xỉu", layout="wide")
 st.title("🎯 DỰ ĐOÁN TÀI/XỈU BẰNG TRÍ TUỆ NHÂN TẠO (AI)")
 st.caption("⚠️ Ứng dụng phục vụ MỤC ĐÍCH NGHIÊN CỨU – KHÔNG khuyến khích cờ bạc.")
 
-# ====== Global constants ======
+# ====== Constants ======
 RANDOM_SEED = 42
 np.random.seed(RANDOM_SEED)
 
-# ====== Utility functions ======
+# ====== Feature Generator ======
 def create_features(history, window=6):
-    """Tạo đặc trưng dựa vào kết quả trước đó."""
     X, y = [], []
     if len(history) <= window:
         return np.empty((0, window)), np.array([])
@@ -41,19 +40,17 @@ def create_features(history, window=6):
     return np.array(X), np.array(y)
 
 def plot_history_pie(history):
-    """Vẽ biểu đồ thống kê Tài/Xỉu"""
     df = pd.DataFrame(history, columns=["Kết quả"])
     counts = df["Kết quả"].value_counts()
     st.subheader("📊 Thống kê kết quả:")
     st.bar_chart(counts)
 
-# ====== Model Training ======
+# ====== Train Models ======
 @st.cache_resource
 def train_models_hybrid(history_tuple, ai_conf_tuple, use_xgb=True):
-    """Huấn luyện mô hình hybrid (LR + RF + XGB)."""
     history = list(history_tuple)
     ai_conf = list(ai_conf_tuple)
-    xgb = None  # quan trọng: khởi tạo sẵn tránh UnboundLocalError
+    xgb = None
 
     if len(history) < 8:
         return None
@@ -62,7 +59,6 @@ def train_models_hybrid(history_tuple, ai_conf_tuple, use_xgb=True):
     if X.shape[0] < 6 or len(np.unique(y)) < 2:
         return None
 
-    # Tạo trọng số
     recent_weight = np.linspace(0.4, 1.0, len(y))
     if ai_conf and len(ai_conf) >= len(y):
         combined = recent_weight * np.array(ai_conf[-len(y):], dtype=float)
@@ -73,11 +69,9 @@ def train_models_hybrid(history_tuple, ai_conf_tuple, use_xgb=True):
         combined = recent_weight
     combined = np.clip(combined, 0.2, 2.0)
 
-    # Cross-validation time-series
     n_splits = min(4, max(2, X.shape[0] // 6))
     tscv = TimeSeriesSplit(n_splits=n_splits)
 
-    # Base models
     lr = LogisticRegressionCV(cv=tscv, max_iter=1000, class_weight='balanced',
                               scoring='accuracy', random_state=RANDOM_SEED)
     rf = RandomForestClassifier(n_estimators=60, max_depth=6, min_samples_split=8,
@@ -85,7 +79,6 @@ def train_models_hybrid(history_tuple, ai_conf_tuple, use_xgb=True):
 
     learners = [('lr', lr), ('rf', rf)]
 
-    # Optional XGBoost
     if use_xgb and HAS_XGB:
         try:
             xgb = XGBClassifier(use_label_encoder=False, eval_metric='logloss',
@@ -94,7 +87,6 @@ def train_models_hybrid(history_tuple, ai_conf_tuple, use_xgb=True):
         except Exception:
             xgb = None
 
-    # Fit models
     try:
         lr.fit(X, y, sample_weight=combined)
     except Exception:
@@ -104,15 +96,10 @@ def train_models_hybrid(history_tuple, ai_conf_tuple, use_xgb=True):
         try:
             xgb.fit(X, y, sample_weight=combined)
         except Exception:
-            try:
-                xgb.fit(X, y)
-            except Exception:
-                xgb = None
+            xgb.fit(X, y)
 
-    # Calibrated RF
     try:
-        calibrated_rf = CalibratedClassifierCV(base_estimator=rf, cv='prefit')
-        calibrated_rf = calibrated_rf.fit(X, y)
+        calibrated_rf = CalibratedClassifierCV(base_estimator=rf, cv='prefit').fit(X, y)
     except Exception:
         calibrated_rf = rf
 
@@ -120,11 +107,9 @@ def train_models_hybrid(history_tuple, ai_conf_tuple, use_xgb=True):
     if xgb is not None:
         estimators_voting.append(('xgb', xgb))
 
-    # Ensemble
     voting = VotingClassifier(estimators=estimators_voting, voting='soft', n_jobs=-1)
     voting.fit(X, y)
 
-    # Stacking
     try:
         stack_estimators = [('lr', lr), ('rf', rf)]
         if xgb is not None:
@@ -134,12 +119,10 @@ def train_models_hybrid(history_tuple, ai_conf_tuple, use_xgb=True):
             final_estimator=LogisticRegression(max_iter=500),
             passthrough=True,
             n_jobs=-1
-        )
-        stack.fit(X, y)
+        ).fit(X, y)
     except Exception:
         stack = voting
 
-    # Evaluate
     metrics = {}
     if X.shape[0] > 12:
         split = int(0.8 * len(X))
@@ -148,12 +131,10 @@ def train_models_hybrid(history_tuple, ai_conf_tuple, use_xgb=True):
         try:
             pred = voting.predict(X_te)
             metrics['voting_acc'] = float(accuracy_score(y_te, pred))
-        except Exception:
-            metrics['voting_acc'] = None
-        try:
             pprob = voting.predict_proba(X_te)[:, 1]
             metrics['voting_brier'] = float(brier_score_loss(y_te, pprob))
         except Exception:
+            metrics['voting_acc'] = None
             metrics['voting_brier'] = None
 
     return {
@@ -189,23 +170,23 @@ col1, col2 = st.columns(2)
 with col1:
     if st.button("➕ Thêm kết quả TÀI"):
         st.session_state.history.append("Tài")
-        st.experimental_rerun()
+        st.rerun()
 with col2:
     if st.button("➖ Thêm kết quả XỈU"):
         st.session_state.history.append("Xỉu")
-        st.experimental_rerun()
+        st.rerun()
 
 if st.button("↩️ Xoá kết quả cuối"):
     if st.session_state.history:
         st.session_state.history.pop()
-        st.experimental_rerun()
+        st.rerun()
 
-# Hiển thị danh sách
+# Hiển thị lịch sử
 if st.session_state.history:
     st.write("🧾 **Chuỗi kết quả:**", " → ".join(st.session_state.history))
     plot_history_pie(st.session_state.history)
 
-# Train model
+# Huấn luyện mô hình
 if st.button("🚀 Huấn luyện AI"):
     with st.spinner("Đang huấn luyện mô hình..."):
         models = train_models_hybrid(
@@ -230,7 +211,7 @@ if "models" in st.session_state:
         else:
             st.warning("Không đủ dữ liệu để dự đoán!")
 
-# Xuất & nhập dữ liệu
+# Xuất / Nhập dữ liệu
 st.divider()
 st.subheader("📦 Lưu / Nạp dữ liệu")
 col3, col4 = st.columns(2)
