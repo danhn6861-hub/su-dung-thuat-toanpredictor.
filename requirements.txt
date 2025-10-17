@@ -1,9 +1,4 @@
 streamlit
 numpy
-pandas
 scikit-learn
 xgboost
-catboost
-joblib
-tensorflow
-scipy
