@@ -31,7 +31,7 @@ if "ai_last_pred" not in st.session_state:
 if "undo_stack" not in st.session_state:
     st.session_state.undo_stack = []
 if "is_processing" not in st.session_state:
-    st.session_state.is_processing = False  # Khóa để ngăn double-click
+    st.session_state.is_processing = False
 
 # ====== Hàm tạo đặc trưng ======
 def create_features(history, window=6):
@@ -50,8 +50,8 @@ def train_models(history_tuple, ai_confidence_tuple, _cache_key):
     history = list(history_tuple)
     ai_confidence = list(ai_confidence_tuple)
     X, y = create_features(history)
-    if len(X) < 10:
-        st.warning("Cần ít nhất 10 ván để huấn luyện mô hình.")
+    if len(X) < 12:  # Tăng yêu cầu tối thiểu để đảm bảo cross-validation
+        st.warning("Cần ít nhất 12 ván để huấn luyện mô hình với cross-validation.")
         return None
 
     try:
@@ -61,14 +61,14 @@ def train_models(history_tuple, ai_confidence_tuple, _cache_key):
             return None
 
         # TimeSeriesSplit với số splits động
-        n_splits = min(3, len(X) // 4)  # Mỗi split cần ít nhất 4 mẫu
+        n_splits = min(3, len(X) // 4)
         if n_splits < 2:
             # Fallback: Fit trực tiếp nếu không đủ dữ liệu cho CV
-            st.warning("Dữ liệu quá ít để cross-validation, huấn luyện trực tiếp...")
+            st.warning("Dữ liệu không đủ để cross-validation, huấn luyện trực tiếp...")
             recent_weight = np.linspace(0.5, 1.0, len(y))
             combined_weight = recent_weight * np.array(ai_confidence[:len(y)]) if len(ai_confidence) >= len(y) else recent_weight
-            stack = LogisticRegression().fit(X, y, sample_weight=combined_weight)  # Simple fallback
-            return stack
+            model = LogisticRegression().fit(X, y, sample_weight=combined_weight)
+            return model
 
         tscv = TimeSeriesSplit(n_splits=n_splits)
 
@@ -101,7 +101,7 @@ def train_models(history_tuple, ai_confidence_tuple, _cache_key):
         return stack
 
     except Exception as e:
-        st.error(f"Lỗi huấn luyện: {str(e)}")
+        st.error(f"Lỗi huấn luyện: {str(e)}. Vui lòng thử nhập thêm dữ liệu hoặc kiểm tra lại.")
         return None
 
 # ====== Hàm phát hiện pattern cải thiện (sử dụng Markov chain đơn giản) ======
@@ -140,7 +140,7 @@ def predict_next(models, history):
 # ====== Hàm thêm kết quả với undo ======
 def add_result(result):
     if st.session_state.is_processing:
-        return  # Ngăn double-click
+        return
     if result not in ["Tài", "Xỉu"]:
         st.error(f"Kết quả không hợp lệ: {result}")
         return
@@ -189,7 +189,7 @@ def import_history(uploaded_file):
                 return
             st.session_state.history = history
             st.session_state.ai_confidence = [1.0] * len(history)
-            st.session_state.undo_stack = []  # Reset undo stack
+            st.session_state.undo_stack = []
             st.success("Đã import lịch sử!")
         except Exception as e:
             st.error(f"Lỗi khi import: {str(e)}")
@@ -267,7 +267,7 @@ st.divider()
 # Huấn luyện
 if st.button("⚙️ Huấn luyện lại từ lịch sử", key="train_models"):
     with st.spinner("Đang huấn luyện các mô hình..."):
-        cache_key = str(len(st.session_state.history)) + str(st.session_state.history[-10:])  # Tạo key động
+        cache_key = str(len(st.session_state.history)) + str(st.session_state.history[-10:])
         st.session_state.models = train_models(tuple(st.session_state.history), tuple(st.session_state.ai_confidence), cache_key)
     if st.session_state.models is not None:
         st.success("✅ Huấn luyện thành công!")
