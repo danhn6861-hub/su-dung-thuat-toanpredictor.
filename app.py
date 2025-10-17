@@ -1,4 +1,4 @@
-# app.py (Cấp 1.1 - Ổn định & Tối ưu tốc độ)
+# app.py (Cấp 1.2 - Ổn định, tự học, không lỗi ValueError)
 import streamlit as st
 import numpy as np
 from collections import Counter
@@ -92,7 +92,7 @@ if "ai_history" not in st.session_state:
 # -----------------------
 # STYLING
 # -----------------------
-st.set_page_config(page_title="AI Tài/Xỉu - Cấp 1.1", page_icon="🎯", layout="centered")
+st.set_page_config(page_title="AI Tài/Xỉu - Cấp 1.2", page_icon="🎯", layout="centered")
 st.markdown("""
 <style>
 .stApp { background-color:#071029; color:#e6eef8; }
@@ -103,8 +103,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🎯 AI Dự đoán Tài/Xỉu — Hệ thống Cấp 1.1")
-st.write("Tối ưu tốc độ huấn luyện, AI tự học rút kinh nghiệm, dự đoán 5 mô hình song song.")
+st.title("🎯 AI Dự đoán Tài/Xỉu — Hệ thống Cấp 1.2")
+st.write("Ổn định hơn, tự học rút kinh nghiệm, tránh lỗi huấn luyện khi dữ liệu lệch 1 phía.")
 
 # -----------------------
 # CORE FUNCTIONS
@@ -115,6 +115,10 @@ def train_models():
         return
 
     X, y = create_features(hist)
+    # Kiểm tra dữ liệu có đủ 2 lớp chưa
+    if len(set(y)) < 2:
+        return  # Chưa đủ dữ liệu để học
+
     feats = encode_history(hist[-WINDOW:])
 
     # Logistic Regression
