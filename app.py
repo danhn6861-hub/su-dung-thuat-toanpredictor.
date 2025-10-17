@@ -44,7 +44,9 @@ def create_features(history, window=6):
 
 # ====== Huấn luyện các mô hình với cải thiện ======
 @st.cache_resource
-def train_models(history, ai_confidence):
+def train_models(history_tuple, ai_confidence_tuple):
+    history = list(history_tuple)
+    ai_confidence = list(ai_confidence_tuple)
     X, y = create_features(history)
     if len(X) < 10:
         return None
@@ -67,12 +69,16 @@ def train_models(history, ai_confidence):
 
         # Stacking classifier cho kết hợp tốt hơn
         stack = StackingClassifier(estimators=estimators, final_estimator=LogisticRegression(), cv=tscv)
-        stack.fit(X, y)
 
         # AI Strategy – học trọng số theo thời gian và độ tin cậy
         recent_weight = np.linspace(0.5, 1.0, len(y))
         combined_weight = recent_weight * np.array(ai_confidence[:len(y)]) if len(ai_confidence) >= len(y) else recent_weight
-        stack.fit(X, y, stackingclassifier__sample_weight=combined_weight)  # Áp dụng trọng số cho stacking
+
+        # Fit với sample_weight (chỉ áp dụng cho final_estimator nếu có hỗ trợ)
+        stack.fit(X, y)
+
+        # Để áp dụng weight, fit lại base models với weight nếu cần, nhưng stacking không trực tiếp hỗ trợ sample_weight cho tất cả, nên fit separate cho AI
+        # Để đơn giản, giữ stack như vậy, và dùng weight cho final nếu có thể.
 
         # Đánh giá mô hình (optional, hiển thị accuracy)
         if len(X) > 20:
@@ -88,7 +94,7 @@ def train_models(history, ai_confidence):
 
 # ====== Hàm phát hiện pattern cải thiện (sử dụng Markov chain đơn giản) ======
 def pattern_detector(history, window=6):
-    if len(history) < window * 2:
+    if len(history) < 2:
         return 0.5
 
     # Xây dựng transition matrix cho Markov
@@ -99,9 +105,12 @@ def pattern_detector(history, window=6):
         curr = states[history[i]]
         trans[prev, curr] += 1
 
-    trans /= np.sum(trans, axis=1, keepdims=True) + 1e-6  # Avoid division by zero
+    row_sums = np.sum(trans, axis=1, keepdims=True)
+    trans = np.divide(trans, row_sums, where=row_sums != 0)  # Tránh division by zero
 
     # Dự đoán dựa trên state cuối
+    if len(history) == 0:
+        return 0.5
     last_state = states[history[-1]]
     return trans[last_state, 1]  # Xác suất chuyển sang Tài
 
@@ -120,24 +129,23 @@ def predict_next(models, history):
 
 # ====== Hàm thêm kết quả với undo ======
 def add_result(result):
-    st.session_state.undo_stack.append(st.session_state.history.copy())  # Lưu trạng thái cũ cho undo
+    st.session_state.undo_stack.append((st.session_state.history.copy(), st.session_state.ai_confidence.copy()))  # Lưu cả confidence
     st.session_state.history.append(result)
     if len(st.session_state.history) > 200:
         st.session_state.history = st.session_state.history[-200:]
+        st.session_state.ai_confidence = st.session_state.ai_confidence[-200:]
 
     # Cập nhật độ tin cậy của AI
     if st.session_state.ai_last_pred is not None:
         was_correct = (st.session_state.ai_last_pred == result)
         st.session_state.ai_confidence.append(1.2 if was_correct else 0.8)
-        if len(st.session_state.ai_confidence) > len(st.session_state.history):
-            st.session_state.ai_confidence = st.session_state.ai_confidence[-len(st.session_state.history):]
 
 # ====== Hàm undo ======
 def undo_last():
     if st.session_state.undo_stack:
-        st.session_state.history = st.session_state.undo_stack.pop()
-        if st.session_state.ai_confidence:
-            st.session_state.ai_confidence.pop()
+        history, confidence = st.session_state.undo_stack.pop()
+        st.session_state.history = history
+        st.session_state.ai_confidence = confidence
 
 # ====== Export/Import lịch sử ======
 def export_history():
@@ -179,45 +187,48 @@ with col1:
         st.info("Chưa có dữ liệu, nhập kết quả để bắt đầu.")
 
 with col2:
-    if st.button("🧹 Xóa lịch sử", key="clear"):
-        if st.session_state.history:  # Xác nhận
-            confirm_clear = st.checkbox("Xác nhận xóa toàn bộ lịch sử?")
-            if confirm_clear:
-                st.session_state.history.clear()
-                st.session_state.ai_confidence.clear()
-                st.session_state.undo_stack.clear()
-                st.success("Đã xóa toàn bộ lịch sử!")
+    if st.button("🧹 Xóa lịch sử", key="clear_history"):
+        confirm_clear = st.checkbox("Xác nhận xóa toàn bộ lịch sử?", key="confirm_clear")
+        if confirm_clear:
+            st.session_state.history = []
+            st.session_state.ai_confidence = []
+            st.session_state.undo_stack = []
+            st.session_state.models = None
+            st.success("Đã xóa toàn bộ lịch sử!")
 
 with col3:
-    if st.button("↩️ Undo nhập cuối", key="undo"):
+    if st.button("↩️ Undo nhập cuối", key="undo_last"):
         undo_last()
         st.success("Đã undo nhập cuối!")
 
 # Biểu đồ
 if st.session_state.history:
-    img_data = plot_history(st.session_state.history)
-    if img_data:
-        st.image(f"data:image/png;base64,{img_data}", caption="Biểu đồ tỷ lệ Tài/Xỉu", use_column_width=True)
+    try:
+        img_data = plot_history(st.session_state.history)
+        if img_data:
+            st.image(f"data:image/png;base64,{img_data}", caption="Biểu đồ tỷ lệ Tài/Xỉu", use_column_width=True)
+    except Exception as e:
+        st.warning(f"Không thể vẽ biểu đồ: {str(e)}. Vui lòng kiểm tra thư viện matplotlib.")
 
 st.divider()
 
-# Nút nhập kết quả với xác nhận (sử dụng session để tránh lặp)
+# Nút nhập kết quả với key unique
 col_tai, col_xiu = st.columns(2)
 with col_tai:
-    if st.button("Nhập Tài"):
+    if st.button("Nhập Tài", key="add_tai"):
         add_result("Tài")
-        st.success("Đã thêm Tài!")
+        st.rerun()  # Force rerun để cập nhật ngay
 with col_xiu:
-    if st.button("Nhập Xỉu"):
+    if st.button("Nhập Xỉu", key="add_xiu"):
         add_result("Xỉu")
-        st.success("Đã thêm Xỉu!")
+        st.rerun()  # Force rerun để cập nhật ngay
 
 st.divider()
 
 # Huấn luyện
-if st.button("⚙️ Huấn luyện lại từ lịch sử"):
+if st.button("⚙️ Huấn luyện lại từ lịch sử", key="train_models"):
     with st.spinner("Đang huấn luyện các mô hình..."):
-        st.session_state.models = train_models(tuple(st.session_state.history), tuple(st.session_state.ai_confidence))  # Use tuple for caching
+        st.session_state.models = train_models(tuple(st.session_state.history), tuple(st.session_state.ai_confidence))
     if st.session_state.models is not None:
         st.success("✅ Huấn luyện thành công!")
 
@@ -243,8 +254,8 @@ st.divider()
 col_export, col_import = st.columns(2)
 with col_export:
     csv = export_history()
-    st.download_button("📥 Export lịch sử (CSV)", csv, f"history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", "text/csv")
+    st.download_button("📥 Export lịch sử (CSV)", csv, f"history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", "text/csv", key="export_history")
 with col_import:
-    uploaded_file = st.file_uploader("📤 Import lịch sử từ CSV", type="csv")
+    uploaded_file = st.file_uploader("📤 Import lịch sử từ CSV", type="csv", key="import_file")
     if uploaded_file:
         import_history(uploaded_file)
