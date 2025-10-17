@@ -4,7 +4,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, StackingClassifier
 from xgboost import XGBClassifier
-from sklearn.model_selection import TimeSeriesSplit, train_test_split
+from sklearn.model_selection import KFold, train_test_split
 from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
 import io
@@ -50,8 +50,8 @@ def train_models(history_tuple, ai_confidence_tuple, _cache_key):
     history = list(history_tuple)
     ai_confidence = list(ai_confidence_tuple)
     X, y = create_features(history)
-    if len(X) < 12:  # Tăng yêu cầu tối thiểu để đảm bảo cross-validation
-        st.warning("Cần ít nhất 12 ván để huấn luyện mô hình với cross-validation.")
+    if len(X) < 10:
+        st.warning("Cần ít nhất 10 ván để huấn luyện mô hình.")
         return None
 
     try:
@@ -60,17 +60,29 @@ def train_models(history_tuple, ai_confidence_tuple, _cache_key):
             st.warning("Dữ liệu không cân bằng (toàn Tài hoặc Xỉu). Mô hình có thể không chính xác.")
             return None
 
-        # TimeSeriesSplit với số splits động
-        n_splits = min(3, len(X) // 4)
+        # Sử dụng KFold với shuffle=False để phù hợp time-series và là partitioner
+        n_splits = min(3, len(X) // 4)  # Mỗi split cần ít nhất 4 mẫu
         if n_splits < 2:
-            # Fallback: Fit trực tiếp nếu không đủ dữ liệu cho CV
-            st.warning("Dữ liệu không đủ để cross-validation, huấn luyện trực tiếp...")
+            # Fallback: Stacking mà không cross-validation nếu không đủ dữ liệu cho CV
+            st.warning("Dữ liệu quá ít để cross-validation, huấn luyện stacking trực tiếp...")
             recent_weight = np.linspace(0.5, 1.0, len(y))
             combined_weight = recent_weight * np.array(ai_confidence[:len(y)]) if len(ai_confidence) >= len(y) else recent_weight
-            model = LogisticRegression().fit(X, y, sample_weight=combined_weight)
-            return model
 
-        tscv = TimeSeriesSplit(n_splits=n_splits)
+            lr = LogisticRegression().fit(X, y, sample_weight=combined_weight)
+            rf = RandomForestClassifier(n_estimators=50, random_state=42).fit(X, y, sample_weight=combined_weight)
+            xgb = XGBClassifier(use_label_encoder=False, eval_metric="logloss").fit(X, y, sample_weight=combined_weight)
+
+            estimators = [
+                ('lr', lr),
+                ('rf', rf),
+                ('xgb', xgb)
+            ]
+
+            stack = StackingClassifier(estimators=estimators, final_estimator=LogisticRegression(), cv=None)
+            stack.fit(X, y)
+            return stack
+
+        tscv = KFold(n_splits=n_splits, shuffle=False)
 
         # AI Strategy – học trọng số theo thời gian và độ tin cậy
         recent_weight = np.linspace(0.5, 1.0, len(y))
