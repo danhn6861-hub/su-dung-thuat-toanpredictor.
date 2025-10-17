@@ -1,112 +1,212 @@
+# app.py (Cấp 1 - Tối ưu tốc độ & bộ nhớ)
 import streamlit as st
 import numpy as np
+from collections import Counter
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 
-# --- Khởi tạo ---
-st.set_page_config(page_title="AI Dự đoán Tài/Xỉu", layout="centered")
+# -----------------------
+# CONFIG
+# -----------------------
+WINDOW = 6
+RANDOM_STATE = 42
 
-if "history" not in st.session_state:
-    st.session_state.history = []
-if "results" not in st.session_state:
-    st.session_state.results = []
-if "ai_strategy" not in st.session_state:
-    st.session_state.ai_strategy = {"win_rate": 0.5, "adjust": 0.0}
-if "model_trained" not in st.session_state:
-    st.session_state.model_trained = False
+# -----------------------
+# HELPERS
+# -----------------------
+def encode_history(history):
+    return [1 if x == "Tài" else 0 for x in history]
 
-# --- Giao diện chính ---
-st.title("🎯 AI Dự Đoán Tài / Xỉu (Tối ưu tốc độ)")
-st.caption("5 mô hình: Logistic Regression, Random Forest, XGBoost, AI Tự học, Pattern Detector")
+def create_features(history, window=WINDOW):
+    H = encode_history(history)
+    X, y = [], []
+    for i in range(len(H) - window):
+        X.append(H[i:i+window])
+        y.append(H[i+window])
+    return np.array(X), np.array(y)
 
-col1, col2 = st.columns(2)
+def pattern_detector_predict(history, window=WINDOW):
+    if len(history) < window + 1:
+        return None, 0.5
+    pattern = history[-window:]
+    matches = []
+    for i in range(len(history) - window):
+        if history[i:i+window] == pattern:
+            if i + window < len(history):
+                matches.append(history[i + window])
+    if not matches:
+        return None, 0.5
+    cnt = Counter(matches)
+    pred = max(cnt.items(), key=lambda x: x[1])[0]
+    prob = cnt[pred] / len(matches)
+    return pred, prob
+
+def safe_predict(model, feats):
+    try:
+        probs = model.predict_proba([feats])[0]
+        return ("Tài", float(probs[1])) if probs[1] >= probs[0] else ("Xỉu", float(probs[0]))
+    except Exception:
+        try:
+            p = model.predict([feats])[0]
+            return ("Tài" if int(p) == 1 else "Xỉu", 0.5)
+        except Exception:
+            return None, 0.5
+
+def normalize_weights(w):
+    s = sum(w.values())
+    if s == 0:
+        n = len(w)
+        for k in w: w[k] = 1/n
+    else:
+        for k in w: w[k] = w[k]/s
+    return w
+
+# -----------------------
+# INIT SESSION
+# -----------------------
+if "history" not in st.session_state: st.session_state.history = []
+if "weights" not in st.session_state:
+    st.session_state.weights = {"LR":1,"RF":1,"XGB":1,"PD":1}
+    normalize_weights(st.session_state.weights)
+if "models" not in st.session_state:
+    st.session_state.models = {"LR":None,"RF":None,"XGB":None}
+if "stats" not in st.session_state:
+    st.session_state.stats = {k:{"correct":0,"total":0} for k in ["LR","RF","XGB","PD","AI"]}
+if "preds" not in st.session_state: st.session_state.preds = {}
+if "probs" not in st.session_state: st.session_state.probs = {}
+if "ai_history" not in st.session_state: st.session_state.ai_history = []
+
+# -----------------------
+# STYLING
+# -----------------------
+st.set_page_config(page_title="AI Tài/Xỉu - Cấp 1", page_icon="🎯", layout="centered")
+st.markdown("""
+<style>
+.stApp { background-color:#071029; color:#e6eef8; }
+.card { background-color:#0a1b2a; padding:14px; border-radius:12px; box-shadow:0 3px 8px rgba(0,0,0,0.4); margin:6px; }
+.model-name { font-weight:700; font-size:16px; color:#8ab4f8; }
+.pred { font-size:20px; font-weight:700; margin-top:4px; }
+.small { font-size:13px; color:#9fb0c9; }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("🎯 AI Dự đoán Tài/Xỉu — Hệ thống Cấp 1")
+st.write("Tối ưu tốc độ, AI tự học rút kinh nghiệm, dự đoán 5 mô hình song song.")
+
+# -----------------------
+# CORE FUNCTIONS
+# -----------------------
+def train_models():
+    hist = st.session_state.history
+    if len(hist) <= WINDOW: return
+
+    X, y = create_features(hist)
+    feats = encode_history(hist[-WINDOW:])
+
+    # Logistic Regression
+    lr = st.session_state.models["LR"] or LogisticRegression(max_iter=150)
+    lr.fit(X, y)
+    p_lr, pr_lr = safe_predict(lr, feats)
+
+    # Random Forest
+    rf = st.session_state.models["RF"] or RandomForestClassifier(n_estimators=50, max_depth=5, random_state=RANDOM_STATE)
+    rf.fit(X, y)
+    p_rf, pr_rf = safe_predict(rf, feats)
+
+    # XGBoost
+    xgb = st.session_state.models["XGB"] or XGBClassifier(n_estimators=50, verbosity=0, eval_metric="logloss")
+    xgb.fit(X, y)
+    p_xgb, pr_xgb = safe_predict(xgb, feats)
+
+    # Pattern Detector
+    p_pd, pr_pd = pattern_detector_predict(hist, window=WINDOW)
+
+    st.session_state.models.update({"LR":lr,"RF":rf,"XGB":xgb})
+    st.session_state.preds = {"LR":p_lr,"RF":p_rf,"XGB":p_xgb,"PD":p_pd}
+    st.session_state.probs = {"LR":pr_lr,"RF":pr_rf,"XGB":pr_xgb,"PD":pr_pd}
+
+    # AI Meta Strategy
+    w = st.session_state.weights
+    score_tai = sum(w[m]*st.session_state.probs[m] for m in w)
+    score_xiu = sum(w[m]*(1-st.session_state.probs[m]) for m in w)
+    ai_pred = "Tài" if score_tai >= score_xiu else "Xỉu"
+    ai_prob = max(score_tai, score_xiu) / (score_tai + score_xiu)
+    st.session_state.preds["AI"], st.session_state.probs["AI"] = ai_pred, ai_prob
+
+def update_ai(result):
+    preds = st.session_state.preds
+    w = st.session_state.weights
+    for m in ["LR","RF","XGB","PD"]:
+        if preds.get(m) == result:
+            w[m] *= 1.05
+        else:
+            w[m] *= 0.95
+    normalize_weights(w)
+    st.session_state.ai_history.append({"real":result,"weights":w.copy()})
+    if len(st.session_state.ai_history) > 30: st.session_state.ai_history.pop(0)
+
+def update_stats(result):
+    for m, pred in st.session_state.preds.items():
+        if pred is None: continue
+        st.session_state.stats[m]["total"] += 1
+        if pred == result:
+            st.session_state.stats[m]["correct"] += 1
+
+def add_result(result):
+    update_stats(result)
+    update_ai(result)
+    st.session_state.history.append(result)
+    train_models()
+
+def reset_all():
+    for key in ["history","models","weights","stats","preds","probs","ai_history"]:
+        if key in st.session_state: del st.session_state[key]
+    st.rerun()
+
+# -----------------------
+# BUTTONS
+# -----------------------
+col1, col2, col3 = st.columns(3)
 with col1:
-    if st.button("🎲 Nhập Tài"):
-        st.session_state.history.append(1)
-    if st.button("🧠 Dự đoán"):
-        st.session_state.model_trained = True
+    if st.button("🔴 TÀI"): add_result("Tài")
 with col2:
-    if st.button("⚪ Nhập Xỉu"):
-        st.session_state.history.append(0)
-    if st.button("🧹 Xóa lịch sử"):
-        st.session_state.history.clear()
-        st.session_state.results.clear()
-        st.session_state.ai_strategy = {"win_rate": 0.5, "adjust": 0.0}
-        st.session_state.model_trained = False
-        st.success("Đã xóa lịch sử và reset AI!")
+    if st.button("🔵 XỈU"): add_result("Xỉu")
+with col3:
+    if st.button("🧹 Xóa lịch sử"): reset_all()
 
-# --- Kiểm tra dữ liệu ---
-if len(st.session_state.history) < 6:
-    st.info("👉 Hãy nhập ít nhất 6 ván để bắt đầu huấn luyện.")
-    st.stop()
+# -----------------------
+# DISPLAY
+# -----------------------
+if not st.session_state.history:
+    st.info("Bấm TÀI hoặc XỈU để bắt đầu huấn luyện.")
+else:
+    st.markdown("### 🧾 Lịch sử:")
+    st.write(" → ".join(st.session_state.history[-40:]))
 
-# --- Chuẩn bị dữ liệu ---
-data = np.array(st.session_state.history)
-X = np.array([data[i:i+5] for i in range(len(data)-5)])
-y = data[5:]
+st.markdown("---")
+st.markdown("## ⚡ Kết quả dự đoán")
 
-# --- Huấn luyện mô hình ---
-lr = LogisticRegression()
-rf = RandomForestClassifier(n_estimators=50, max_depth=4)
-xgb = XGBClassifier(n_estimators=30, max_depth=3, learning_rate=0.2, verbosity=0)
+cols = st.columns(3)
+models = ["LR","RF","XGB","PD","AI"]
+for i, m in enumerate(models):
+    with cols[i % 3]:
+        pred = st.session_state.preds.get(m)
+        prob = st.session_state.probs.get(m,0.5)
+        stats = st.session_state.stats.get(m,{"correct":0,"total":0})
+        total = stats["total"]; win = stats["correct"]
+        rate = win/total if total else 0
+        name = {"LR":"Logistic Regression","RF":"Random Forest","XGB":"XGBoost","PD":"Pattern Detector","AI":"AI Strategy"}[m]
+        st.markdown(f"""
+        <div class="card">
+            <div class="model-name">{name}</div>
+            <div class="small">Dự đoán:</div>
+            <div class="pred">{pred if pred else 'Chưa đủ dữ liệu'}</div>
+            <div class="small">Xác suất: {prob:.1%}</div>
+            <div class="small">Tỉ lệ thắng: {rate:.1%} ({win}/{total})</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-lr.fit(X, y)
-rf.fit(X, y)
-xgb.fit(X, y)
-
-# --- Pattern Detector ---
-def pattern_predict(last6, history):
-    if len(history) < 12:
-        return np.random.choice([0, 1])
-    for i in range(len(history) - 6):
-        if history[i:i+6] == last6:
-            return history[i+6] if i+6 < len(history) else np.random.choice([0, 1])
-    return np.random.choice([0, 1])
-
-# --- AI Tự học Chiến lược ---
-def ai_strategy_predict():
-    base = st.session_state.ai_strategy["win_rate"] + st.session_state.ai_strategy["adjust"]
-    return 1 if np.random.random() < base else 0
-
-# --- Dự đoán ---
-last5 = np.array(st.session_state.history[-5:]).reshape(1, -1)
-pred_lr = lr.predict(last5)[0]
-pred_rf = rf.predict(last5)[0]
-pred_xgb = xgb.predict(last5)[0]
-pred_pattern = pattern_predict(st.session_state.history[-6:], st.session_state.history)
-pred_ai = ai_strategy_predict()
-
-preds = [pred_lr, pred_rf, pred_xgb, pred_ai, pred_pattern]
-final_pred = int(round(np.mean(preds)))
-
-# --- Hiển thị kết quả ---
-st.subheader("📊 Kết quả dự đoán")
-models = [
-    ("Logistic Regression", pred_lr, "Phân định tuyến tính cơ bản"),
-    ("Random Forest", pred_rf, "Giảm overfit, học ổn định"),
-    ("XGBoost", pred_xgb, "Boosting mạnh, học mẫu phức tạp"),
-    ("AI Tự học Chiến lược", pred_ai, "Rút kinh nghiệm từ kết quả"),
-    ("Pattern Detector", pred_pattern, "Phát hiện mẫu lặp 6 ván gần nhất"),
-]
-
-cols = st.columns(5)
-for i, (name, pred, desc) in enumerate(models):
-    with cols[i]:
-        st.markdown(f"**{name}**")
-        st.markdown(f"{'🟥 Xỉu' if pred==0 else '🟩 Tài'}")
-        st.caption(desc)
-
-# --- Cập nhật học kinh nghiệm ---
-if len(st.session_state.results) > 0:
-    wins = sum(st.session_state.results)
-    total = len(st.session_state.results)
-    st.session_state.ai_strategy["win_rate"] = wins / total
-
-# --- Lưu kết quả ---
-st.session_state.results.append(final_pred)
-win_rate = st.session_state.ai_strategy["win_rate"] * 100
-
-st.markdown(f"### 🎯 Dự đoán chung: {'🟩 Tài' if final_pred==1 else '🟥 Xỉu'}")
-st.progress(win_rate / 100)
-st.write(f"**Tỉ lệ thắng (ước tính): {win_rate:.1f}%**")
+st.markdown("---")
+st.write("Trọng số học hiện tại:")
+st.write(st.session_state.weights)
