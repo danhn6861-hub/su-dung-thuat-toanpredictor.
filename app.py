@@ -1,404 +1,214 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
-from sklearn.ensemble import RandomForestClassifier, VotingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
-from sklearn.model_selection import KFold, train_test_split, TimeSeriesSplit
+from sklearn.model_selection import TimeSeriesSplit
 from sklearn.metrics import accuracy_score
-import matplotlib.pyplot as plt
-import io
-import base64
+import io, base64
 from datetime import datetime
+import matplotlib.pyplot as plt
+import random
 
-st.set_page_config(page_title="Dự đoán Tài/Xỉu AI - Phiên bản Nâng Cao", layout="wide")
+st.set_page_config(page_title="AI Chiến Lược Tự Tiến Hóa – Cấp 5", layout="wide")
 
-# Disclaimer
-st.sidebar.markdown("""
-### ⚠️ Lưu Ý
-Ứng dụng này chỉ mang tính chất giải trí và tham khảo. Kết quả dự đoán dựa trên lịch sử ngẫu nhiên và không đảm bảo độ chính xác. Không khuyến khích sử dụng cho mục đích cờ bạc hoặc đầu tư thực tế, vì các trò chơi như Tài/Xỉu thường là ngẫu nhiên và có thể dẫn đến rủi ro tài chính.
-""")
-
-# ====== Khởi tạo trạng thái ======
+# ===========================
+# ⚙️ KHỞI TẠO TRẠNG THÁI
+# ===========================
 if "history" not in st.session_state:
     st.session_state.history = []
 if "ai_confidence" not in st.session_state:
     st.session_state.ai_confidence = []
 if "models" not in st.session_state:
     st.session_state.models = None
+if "strategies" not in st.session_state:
+    st.session_state.strategies = {}
+if "best_strategy" not in st.session_state:
+    st.session_state.best_strategy = None
 if "ai_last_pred" not in st.session_state:
     st.session_state.ai_last_pred = None
-if "undo_stack" not in st.session_state:
-    st.session_state.undo_stack = []
-if "is_processing" not in st.session_state:
-    st.session_state.is_processing = False
 
-# ====== Hàm tạo đặc trưng cải tiến - giảm overfitting ======
-def create_features_improved(history, window=5):
+# ===========================
+# 🧩 HÀM TẠO ĐẶC TRƯNG
+# ===========================
+def create_features(history, window=6):
     if len(history) < window + 1:
-        return np.empty((0, window + 2)), np.empty((0,))  # +2 cho features mới
-    
-    X = []
-    y = []
-    
+        return np.empty((0, window + 2)), np.empty((0,))
+    X, y = [], []
     for i in range(window, len(history)):
-        # Features cơ bản
-        base_features = [1 if x == "Tài" else 0 for x in history[i - window:i]]
-        
-        # Thêm features thống kê để giảm overfitting
-        tai_count = sum(base_features)
-        xiu_count = window - tai_count
-        tai_ratio = tai_count / window
-        
-        # Features về biến động (thay đổi liên tục)
-        changes = 0
-        for j in range(1, len(base_features)):
-            if base_features[j] != base_features[j-1]:
-                changes += 1
-        change_ratio = changes / (window - 1) if window > 1 else 0
-        
-        # Kết hợp tất cả features
-        combined_features = base_features + [tai_ratio, change_ratio]
-        
-        X.append(combined_features)
+        base = [1 if x == "Tài" else 0 for x in history[i-window:i]]
+        tai_ratio = sum(base) / window
+        flip = sum(base[j] != base[j-1] for j in range(1, len(base))) / (window - 1)
+        X.append(base + [tai_ratio, flip])
         y.append(1 if history[i] == "Tài" else 0)
-    
     return np.array(X), np.array(y)
 
-# ====== Pattern detector cải tiến ======
-def pattern_detector_improved(history, lookback=8):
-    if len(history) < 3:
+# ===========================
+# 🧠 MÔ HÌNH HỌC CƠ BẢN
+# ===========================
+def train_base_models(history, ai_confidence):
+    X, y = create_features(history)
+    if len(X) < 20:
+        return None
+    recent_weight = np.linspace(0.5, 1.0, len(y))
+    if len(ai_confidence) == len(y):
+        recent_weight *= np.array(ai_confidence)
+    lr = LogisticRegression(max_iter=500)
+    rf = RandomForestClassifier(n_estimators=50, random_state=42)
+    xgb = XGBClassifier(use_label_encoder=False, eval_metric="logloss", n_estimators=40)
+    lr.fit(X, y, sample_weight=recent_weight)
+    rf.fit(X, y, sample_weight=recent_weight)
+    xgb.fit(X, y, sample_weight=recent_weight)
+    return lr, rf, xgb
+
+# ===========================
+# 🎯 CHIẾN LƯỢC TIẾN HÓA
+# ===========================
+def init_strategies():
+    return {
+        "pattern_reversal": {"score": 1.0, "desc": "Đảo chiều khi chuỗi dài"},
+        "trend_follow": {"score": 1.0, "desc": "Theo xu hướng gần nhất"},
+        "balanced_model": {"score": 1.0, "desc": "Kết hợp 3 model chính"},
+        "random_check": {"score": 1.0, "desc": "Ngẫu nhiên kiểm tra đối chứng"},
+        "meta_hybrid": {"score": 1.0, "desc": "Tự cân bằng giữa model & pattern"}
+    }
+
+def update_strategy_performance(result):
+    if "ai_last_pred" not in st.session_state or st.session_state.ai_last_pred is None:
+        return
+    last = st.session_state.best_strategy
+    if last not in st.session_state.strategies:
+        return
+    was_correct = (st.session_state.ai_last_pred == result)
+    st.session_state.strategies[last]["score"] *= (1.1 if was_correct else 0.9)
+
+def evolve_strategies():
+    s = st.session_state.strategies
+    scores = {k: v["score"] for k, v in s.items()}
+    best = max(scores, key=scores.get)
+    st.session_state.best_strategy = best
+    return best, scores
+
+# ===========================
+# 🧩 PATTERN PHÂN TÍCH
+# ===========================
+def pattern_detector(history, lookback=6):
+    if len(history) < lookback:
         return 0.5
-    
-    # Phân tích đa chiều thay vì chỉ transition đơn giản
-    recent = history[-lookback:] if len(history) >= lookback else history
-    
-    # Tính tỷ lệ Tài/Xỉu gần đây
-    tai_recent = sum(1 for x in recent if x == "Tài")
-    xiu_recent = len(recent) - tai_recent
-    
-    # Phát hiện chuỗi
-    max_streak = 0
-    current_streak = 1
-    for i in range(1, len(recent)):
-        if recent[i] == recent[i-1]:
-            current_streak += 1
-            max_streak = max(max_streak, current_streak)
-        else:
-            current_streak = 1
-    
-    # Logic: nếu chuỗi quá dài, khả năng đảo chiều cao hơn
-    streak_factor = min(max_streak / 4.0, 1.0)  # Chuỗi 4+ là đáng chú ý
-    
-    # Cân bằng hơn - tránh thiên vị số đông
-    base_prob = tai_recent / len(recent)
-    
-    # Điều chỉnh dựa trên streak (mean reversion)
-    if streak_factor > 0.5:
-        adjusted_prob = 1.0 - base_prob  # Thiên về đảo chiều khi streak dài
+    recent = history[-lookback:]
+    same = sum(recent[i]==recent[i-1] for i in range(1,len(recent)))
+    streak = same / (lookback - 1)
+    return 1 - streak if streak > 0.6 else 0.5
+
+# ===========================
+# 🔮 DỰ ĐOÁN TỔNG HỢP
+# ===========================
+def predict_next(models, history):
+    if models is None or len(history) < 6:
+        return None, None
+    lr, rf, xgb = models
+    X, _ = create_features(history)
+    latest = X[-1:]
+    prob_lr = lr.predict_proba(latest)[0][1]
+    prob_rf = rf.predict_proba(latest)[0][1]
+    prob_xgb = xgb.predict_proba(latest)[0][1]
+    model_prob = np.mean([prob_lr, prob_rf, prob_xgb])
+    pattern_prob = pattern_detector(history)
+    recent_ratio = sum(1 for x in history[-5:] if x == "Tài") / 5
+
+    # CHIẾN LƯỢC HIỆN HÀNH
+    strategy = st.session_state.best_strategy or "balanced_model"
+    if strategy == "pattern_reversal":
+        final = 0.7 * pattern_prob + 0.3 * (1 - model_prob)
+    elif strategy == "trend_follow":
+        final = 0.7 * model_prob + 0.3 * recent_ratio
+    elif strategy == "balanced_model":
+        final = (model_prob + pattern_prob) / 2
+    elif strategy == "random_check":
+        final = random.uniform(0.3, 0.7)
+    elif strategy == "meta_hybrid":
+        adapt = 0.6 if abs(recent_ratio - 0.5) > 0.3 else 0.4
+        final = adapt * model_prob + (1 - adapt) * pattern_prob
     else:
-        adjusted_prob = 0.5  # Trung lập khi không có streak rõ rệt
-    
-    return max(0.1, min(0.9, adjusted_prob))  # Giới hạn trong khoảng 10%-90%
+        final = model_prob
 
-# ====== Huấn luyện mô hình cải tiến - tập trung generalization ======
-@st.cache_resource
-def train_models_improved(history_tuple, ai_confidence_tuple, _cache_key):
-    history = list(history_tuple)
-    ai_confidence = list(ai_confidence_tuple)
-    X, y = create_features_improved(history)
-    
-    if len(X) < 15:  # Tăng yêu cầu dữ liệu tối thiểu
-        st.warning("Cần ít nhất 15 ván để huấn luyện mô hình ổn định.")
-        return None
+    preds = {
+        "Logistic": prob_lr,
+        "RandomForest": prob_rf,
+        "XGBoost": prob_xgb,
+        "Pattern": pattern_prob
+    }
+    return preds, final
 
-    try:
-        # Kiểm tra đa dạng dữ liệu
-        unique_classes = len(np.unique(y))
-        if unique_classes < 2:
-            st.warning("Dữ liệu không đa dạng. Cần cả kết quả Tài và Xỉu.")
-            return None
-
-        # Sử dụng mô hình đơn giản hơn để giảm overfitting
-        from sklearn.linear_model import LogisticRegressionCV
-        
-        # Cross-validation cho time series
-        tscv = TimeSeriesSplit(n_splits=min(4, len(X)//5))
-        
-        # Model đơn giản với regularization
-        lr = LogisticRegressionCV(
-            cv=tscv, 
-            random_state=42,
-            max_iter=1000,
-            class_weight='balanced'  # Cân bằng class imbalance
-        )
-        
-        # Random Forest với parameters giảm overfitting
-        rf = RandomForestClassifier(
-            n_estimators=30,  # Giảm số cây
-            max_depth=5,      # Giới hạn độ sâu
-            min_samples_split=10,
-            random_state=42,
-            class_weight='balanced'
-        )
-        
-        # Huấn luyện với sample_weight nhẹ hơn
-        recent_weight = np.linspace(0.3, 1.0, len(y))  # Giảm trọng số gần đây
-        combined_weight = recent_weight * np.array(ai_confidence[:len(y)]) if len(ai_confidence) >= len(y) else recent_weight
-        
-        # Huấn luyện các model
-        lr.fit(X, y, sample_weight=combined_weight)
-        rf.fit(X, y, sample_weight=combined_weight)
-        
-        # Voting đơn giản thay vì stacking phức tạp
-        voting = VotingClassifier(
-            estimators=[('lr', lr), ('rf', rf)],
-            voting='soft'
-        )
-        voting.fit(X, y)
-        
-        # Đánh giá
-        if len(X) > 20:
-            # Chia train/test theo thời gian
-            split_idx = int(0.8 * len(X))
-            X_train, X_test = X[:split_idx], X[split_idx:]
-            y_train, y_test = y[:split_idx], y[split_idx:]
-            
-            voting.fit(X_train, y_train)
-            acc = accuracy_score(y_test, voting.predict(X_test))
-            st.info(f"Độ chính xác kiểm tra: {acc:.2%}")
-            
-            # Kiểm tra overfitting
-            train_acc = accuracy_score(y_train, voting.predict(X_train))
-            if train_acc - acc > 0.3:  # Chênh lệch lớn -> overfitting
-                st.warning("Mô hình có thể bị overfitting. Kết quả dự đoán cần thận trọng.")
-        
-        return voting
-
-    except Exception as e:
-        st.error(f"Lỗi huấn luyện: {str(e)}")
-        return None
-
-# ====== Hàm dự đoán cải tiến ======
-def predict_next_improved(models, history):
-    if len(history) < 5 or models is None:  # Giảm window requirement
-        return None, None
-
-    try:
-        # Tạo features mới
-        X, _ = create_features_improved(history)
-        latest = X[-1:].reshape(1, -1) if len(X) > 0 else None
-        
-        if latest is None:
-            return None, None
-            
-        model_prob = models.predict_proba(latest)[0][1]
-        pattern_score = pattern_detector_improved(history)
-        
-        # Kết hợp cân bằng hơn, ưu tiên pattern khi có streak rõ rệt
-        recent_tai_ratio = sum(1 for x in history[-5:] if x == "Tài") / 5
-        if abs(recent_tai_ratio - 0.5) > 0.4:  # Nghiêng hẳn 1 phía
-            final_score = 0.4 * model_prob + 0.6 * pattern_score
-        else:
-            final_score = 0.6 * model_prob + 0.4 * pattern_score
-            
-        return {
-            "Model Probability": model_prob, 
-            "Pattern Analysis": pattern_score,
-            "Recent Balance": recent_tai_ratio
-        }, final_score
-        
-    except Exception as e:
-        st.error(f"Lỗi dự đoán: {str(e)}")
-        return None, None
-
-# ====== Hàm thêm kết quả với undo ======
+# ===========================
+# ⚙️ HÀM THÊM KẾT QUẢ
+# ===========================
 def add_result(result):
-    if st.session_state.is_processing:
-        return
-    if result not in ["Tài", "Xỉu"]:
-        st.error(f"Kết quả không hợp lệ: {result}")
-        return
-    st.session_state.is_processing = True
-    try:
-        st.session_state.undo_stack.append((st.session_state.history.copy(), st.session_state.ai_confidence.copy()))
-        st.session_state.history.append(result)
-        if len(st.session_state.history) > 200:
-            st.session_state.history = st.session_state.history[-200:]
-            st.session_state.ai_confidence = st.session_state.ai_confidence[-200:]
-        if st.session_state.ai_last_pred is not None:
-            was_correct = (st.session_state.ai_last_pred == result)
-            st.session_state.ai_confidence.append(1.2 if was_correct else 0.8)
-    finally:
-        st.session_state.is_processing = False
+    st.session_state.history.append(result)
+    if len(st.session_state.history) > 300:
+        st.session_state.history = st.session_state.history[-300:]
+    update_strategy_performance(result)
 
-# ====== Hàm undo ======
-def undo_last():
-    if st.session_state.is_processing:
-        return
-    st.session_state.is_processing = True
-    try:
-        if st.session_state.undo_stack:
-            history, confidence = st.session_state.undo_stack.pop()
-            st.session_state.history = history
-            st.session_state.ai_confidence = confidence
-    finally:
-        st.session_state.is_processing = False
+# ===========================
+# 💻 GIAO DIỆN
+# ===========================
+st.title("🧠 AI Dự Đoán Tài/Xỉu – Cấp 5: Chiến Lược Tự Tiến Hóa")
 
-# ====== Export/Import lịch sử ======
-def export_history():
-    df = pd.DataFrame({"Kết quả": st.session_state.history})
-    csv = df.to_csv(index=False).encode('utf-8')
-    return csv
-
-def import_history(uploaded_file):
-    if uploaded_file is not None:
-        try:
-            df = pd.read_csv(uploaded_file)
-            if "Kết quả" not in df.columns:
-                st.error("File CSV phải có cột 'Kết quả'.")
-                return
-            history = df["Kết quả"].tolist()
-            if not all(x in ["Tài", "Xỉu"] for x in history):
-                st.error("Dữ liệu trong file CSV chứa giá trị không hợp lệ (chỉ chấp nhận 'Tài' hoặc 'Xỉu').")
-                return
-            st.session_state.history = history
-            st.session_state.ai_confidence = [1.0] * len(history)
-            st.session_state.undo_stack = []
-            st.success("Đã import lịch sử!")
-        except Exception as e:
-            st.error(f"Lỗi khi import: {str(e)}")
-
-# ====== Vẽ biểu đồ ======
-def plot_history(history):
-    if not history:
-        return None
-    df = pd.DataFrame({"Kết quả": history})
-    counts = df["Kết quả"].value_counts(normalize=True) * 100
-    fig, ax = plt.subplots()
-    counts.plot(kind='bar', ax=ax, color=['green', 'red'])
-    ax.set_ylabel("Tỷ lệ (%)")
-    ax.set_title("Tỷ lệ Tài/Xỉu trong lịch sử")
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png")
-    buf.seek(0)
-    plt.close(fig)
-    return base64.b64encode(buf.read()).decode('utf-8')
-
-# ====== Giao diện ======
-st.title("🎯 AI Dự đoán Tài / Xỉu – Phiên bản Nâng Cao Tự Học")
-
-col1, col2, col3 = st.columns([2, 1, 1])
+col1, col2 = st.columns([2,1])
 with col1:
-    st.markdown("#### 📊 Kết quả gần đây:")
-    if st.session_state.history:
-        st.write(" → ".join(st.session_state.history[-30:]))
-    else:
-        st.info("Chưa có dữ liệu, nhập kết quả để bắt đầu.")
-
+    st.write("📜 Lịch sử gần đây:")
+    st.write(" → ".join(st.session_state.history[-30:]) if st.session_state.history else "Chưa có dữ liệu.")
 with col2:
-    if st.button("🧹 Xóa lịch sử", key="clear_history"):
-        confirm_clear = st.checkbox("Xác nhận xóa toàn bộ lịch sử?", key="confirm_clear")
-        if confirm_clear:
-            st.session_state.history = []
-            st.session_state.ai_confidence = []
-            st.session_state.undo_stack = []
-            st.session_state.models = None
-            st.success("Đã xóa toàn bộ lịch sử!")
-            st.rerun()
-
-with col3:
-    if st.button("↩️ Undo nhập cuối", key="undo_last"):
-        undo_last()
-        st.success("Đã undo nhập cuối!")
-        st.rerun()
-
-# Biểu đồ
-if st.session_state.history:
-    try:
-        img_data = plot_history(st.session_state.history)
-        if img_data:
-            st.image(f"data:image/png;base64,{img_data}", caption="Biểu đồ tỷ lệ Tài/Xỉu", use_container_width=True)
-    except Exception as e:
-        st.warning(f"Không thể vẽ biểu đồ: {str(e)}. Vui lòng kiểm tra thư viện matplotlib.")
+    if st.button("🧹 Xóa lịch sử"):
+        st.session_state.history.clear()
+        st.session_state.strategies = init_strategies()
+        st.session_state.best_strategy = None
+        st.success("Đã xóa toàn bộ lịch sử!")
 
 st.divider()
 
-# Nút nhập kết quả với key unique
+# Nút nhập
 col_tai, col_xiu = st.columns(2)
 with col_tai:
-    if st.button("Nhập Tài", key="add_tai", disabled=st.session_state.is_processing):
+    if st.button("Nhập Tài"):
         add_result("Tài")
-        st.success("Đã thêm Tài!")
         st.rerun()
 with col_xiu:
-    if st.button("Nhập Xỉu", key="add_xiu", disabled=st.session_state.is_processing):
+    if st.button("Nhập Xỉu"):
         add_result("Xỉu")
-        st.success("Đã thêm Xỉu!")
         st.rerun()
 
 st.divider()
 
 # Huấn luyện
-if st.button("⚙️ Huấn luyện lại từ lịch sử", key="train_models"):
-    with st.spinner("Đang huấn luyện các mô hình cải tiến..."):
-        cache_key = str(len(st.session_state.history)) + str(st.session_state.history[-10:])
-        st.session_state.models = train_models_improved(tuple(st.session_state.history), tuple(st.session_state.ai_confidence), cache_key)
-    if st.session_state.models is not None:
-        st.success("✅ Huấn luyện thành công với phiên bản cải tiến!")
+if st.button("⚙️ Huấn luyện AI"):
+    st.session_state.models = train_base_models(st.session_state.history, st.session_state.ai_confidence)
+    if st.session_state.models:
+        if not st.session_state.strategies:
+            st.session_state.strategies = init_strategies()
+        st.success("✅ AI đã huấn luyện xong và lưu chiến lược!")
+        st.rerun()
 
 # Dự đoán
-if len(st.session_state.history) >= 5:
-    if st.session_state.models is None:
-        st.info("Vui lòng huấn luyện mô hình trước.")
-    else:
-        preds, final_score = predict_next_improved(st.session_state.models, st.session_state.history)
-        if preds:
-            st.session_state.ai_last_pred = "Tài" if final_score >= 0.5 else "Xỉu"
-            st.subheader(f"🎯 Dự đoán chung: **{st.session_state.ai_last_pred}** ({final_score:.2%})")
-            st.caption("Tổng hợp từ Model + Pattern Analysis (phiên bản cải tiến):")
-            for k, v in preds.items():
-                if k == "Recent Balance":
-                    st.write(f"**{k}** → {v:.2%} Tài trong 5 ván gần nhất")
-                else:
-                    st.write(f"**{k}** → {v:.2%}")
-            
-            # Thêm phân tích streak
-            recent = st.session_state.history[-5:]
-            current_streak = 1
-            for i in range(1, len(recent)):
-                if recent[i] == recent[i-1]:
-                    current_streak += 1
-                else:
-                    break
-            if current_streak >= 3:
-                st.info(f"🔍 Đang có chuỗi {recent[0]} {current_streak} ván liên tiếp - Pattern detector đang xem xét khả năng đảo chiều")
+if st.session_state.models and len(st.session_state.history) >= 6:
+    best, scores = evolve_strategies()
+    preds, final = predict_next(st.session_state.models, st.session_state.history)
+    if preds:
+        st.session_state.ai_last_pred = "Tài" if final >= 0.5 else "Xỉu"
+        st.subheader(f"🎯 Dự đoán: **{st.session_state.ai_last_pred}** ({final:.2%})")
+        st.caption(f"Chiến lược hiện tại: **{best}** – điểm {scores[best]:.2f}")
+        st.write("Chi tiết từng mô hình:")
+        for k, v in preds.items():
+            st.write(f"- {k}: {v:.2%}")
+        st.progress(final)
 else:
-    st.warning("Cần ít nhất 5 ván để bắt đầu dự đoán.")
+    st.info("Huấn luyện AI và nhập đủ 6 ván để bắt đầu dự đoán.")
 
-st.divider()
-
-# Export/Import
-col_export, col_import = st.columns(2)
-with col_export:
-    csv = export_history()
-    st.download_button("📥 Export lịch sử (CSV)", csv, f"history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", "text/csv", key="export_history")
-with col_import:
-    uploaded_file = st.file_uploader("📤 Import lịch sử từ CSV", type="csv", key="import_file")
-    if uploaded_file:
-        import_history(uploaded_file)
-
-# Thông tin về cải tiến
 st.sidebar.markdown("""
-### 🚀 Phiên bản Cải Tiến
-**Chống Overfitting:**
-- Features thống kê đa dạng
-- Regularization mạnh
-- Model đơn giản hơn
-- Time-series validation
-
-**Pattern Detection Thông Minh:**
-- Phát hiện chuỗi dài
-- Mean reversion logic
-- Cân bằng tỷ lệ lịch sử
+### 🧬 Cấp 5 – Evolutionary AI
+- Tự sinh & tiến hóa chiến lược
+- Tự đánh giá hiệu suất từng mô hình
+- Cơ chế thưởng/phạt sau mỗi lần dự đoán
+- Tự điều chỉnh hướng học (Meta-learning)
 """)
