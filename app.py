@@ -4,7 +4,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, StackingClassifier
 from xgboost import XGBClassifier
-from sklearn.model_selection import TimeSeriesSplit, train_test_split
+from sklearn.model_selection import KFold, train_test_split
 from sklearn.metrics import accuracy_score
 import matplotlib.pyplot as plt
 import io
@@ -57,8 +57,8 @@ def train_models(history_tuple, ai_confidence_tuple):
             st.warning("Dữ liệu không cân bằng (toàn Tài hoặc Xỉu). Mô hình có thể không chính xác.")
             return None
 
-        # TimeSeriesSplit để tránh data leakage
-        tscv = TimeSeriesSplit(n_splits=3)
+        # Sử dụng KFold với shuffle=False để phù hợp với time-series và là partition
+        tscv = KFold(n_splits=3, shuffle=False)
 
         # Các base models
         estimators = [
@@ -74,11 +74,9 @@ def train_models(history_tuple, ai_confidence_tuple):
         recent_weight = np.linspace(0.5, 1.0, len(y))
         combined_weight = recent_weight * np.array(ai_confidence[:len(y)]) if len(ai_confidence) >= len(y) else recent_weight
 
-        # Fit với sample_weight (chỉ áp dụng cho final_estimator nếu có hỗ trợ)
+        # Note: StackingClassifier không hỗ trợ sample_weight trực tiếp, nên bỏ qua weight cho stacking
+        # Nếu cần weight, có thể implement manual stacking
         stack.fit(X, y)
-
-        # Để áp dụng weight, fit lại base models với weight nếu cần, nhưng stacking không trực tiếp hỗ trợ sample_weight cho tất cả, nên fit separate cho AI
-        # Để đơn giản, giữ stack như vậy, và dùng weight cho final nếu có thể.
 
         # Đánh giá mô hình (optional, hiển thị accuracy)
         if len(X) > 20:
@@ -206,7 +204,7 @@ if st.session_state.history:
     try:
         img_data = plot_history(st.session_state.history)
         if img_data:
-            st.image(f"data:image/png;base64,{img_data}", caption="Biểu đồ tỷ lệ Tài/Xỉu", use_column_width=True)
+            st.image(f"data:image/png;base64,{img_data}", caption="Biểu đồ tỷ lệ Tài/Xỉu", use_container_width=True)
     except Exception as e:
         st.warning(f"Không thể vẽ biểu đồ: {str(e)}. Vui lòng kiểm tra thư viện matplotlib.")
 
@@ -217,11 +215,11 @@ col_tai, col_xiu = st.columns(2)
 with col_tai:
     if st.button("Nhập Tài", key="add_tai"):
         add_result("Tài")
-        st.rerun()  # Force rerun để cập nhật ngay
+        st.experimental_rerun()  # Sử dụng experimental_rerun nếu rerun không hoạt động ổn định
 with col_xiu:
     if st.button("Nhập Xỉu", key="add_xiu"):
         add_result("Xỉu")
-        st.rerun()  # Force rerun để cập nhật ngay
+        st.experimental_rerun()  # Sử dụng experimental_rerun nếu rerun không hoạt động ổn định
 
 st.divider()
 
