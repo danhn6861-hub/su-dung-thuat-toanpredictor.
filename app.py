@@ -1,4 +1,4 @@
-# app.py (Cấp 1.2 - Ổn định, tự học, không lỗi ValueError)
+# app.py (Cấp 1.3 - Huấn luyện thủ công, tốc độ tối đa)
 import streamlit as st
 import numpy as np
 from collections import Counter
@@ -92,7 +92,7 @@ if "ai_history" not in st.session_state:
 # -----------------------
 # STYLING
 # -----------------------
-st.set_page_config(page_title="AI Tài/Xỉu - Cấp 1.2", page_icon="🎯", layout="centered")
+st.set_page_config(page_title="AI Tài/Xỉu - Cấp 1.3", page_icon="🎯", layout="centered")
 st.markdown("""
 <style>
 .stApp { background-color:#071029; color:#e6eef8; }
@@ -103,8 +103,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🎯 AI Dự đoán Tài/Xỉu — Hệ thống Cấp 1.2")
-st.write("Ổn định hơn, tự học rút kinh nghiệm, tránh lỗi huấn luyện khi dữ liệu lệch 1 phía.")
+st.title("🎯 AI Dự đoán Tài/Xỉu — Hệ thống Cấp 1.3")
+st.write("Tối ưu tốc độ, huấn luyện thủ công, tự học trọng số, 5 mô hình song song.")
 
 # -----------------------
 # CORE FUNCTIONS
@@ -112,12 +112,13 @@ st.write("Ổn định hơn, tự học rút kinh nghiệm, tránh lỗi huấn 
 def train_models():
     hist = st.session_state.history
     if len(hist) <= WINDOW:
+        st.warning("⚠️ Chưa đủ dữ liệu để huấn luyện (cần >6 ván).")
         return
 
     X, y = create_features(hist)
-    # Kiểm tra dữ liệu có đủ 2 lớp chưa
     if len(set(y)) < 2:
-        return  # Chưa đủ dữ liệu để học
+        st.warning("⚠️ Dữ liệu toàn Tài hoặc toàn Xỉu, chưa thể huấn luyện.")
+        return
 
     feats = encode_history(hist[-WINDOW:])
 
@@ -159,6 +160,8 @@ def train_models():
     ai_prob = max(score_tai, score_xiu) / (score_tai + score_xiu)
     st.session_state.preds["AI"], st.session_state.probs["AI"] = ai_pred, ai_prob
 
+    st.success("✅ Huấn luyện xong, mô hình đã được cập nhật!")
+
 def update_ai(result):
     preds = st.session_state.preds
     w = st.session_state.weights
@@ -184,7 +187,6 @@ def add_result(result):
     update_stats(result)
     update_ai(result)
     st.session_state.history.append(result)
-    train_models()
 
 def reset_all():
     for key in ["history", "models", "weights", "stats", "preds", "probs", "ai_history"]:
@@ -195,7 +197,7 @@ def reset_all():
 # -----------------------
 # BUTTONS
 # -----------------------
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 with col1:
     if st.button("🔴 TÀI"):
         add_result("Tài")
@@ -203,6 +205,9 @@ with col2:
     if st.button("🔵 XỈU"):
         add_result("Xỉu")
 with col3:
+    if st.button("⚙️ Huấn luyện lại"):
+        train_models()
+with col4:
     if st.button("🧹 Xóa lịch sử"):
         reset_all()
 
@@ -210,7 +215,7 @@ with col3:
 # DISPLAY
 # -----------------------
 if not st.session_state.history:
-    st.info("Bấm TÀI hoặc XỈU để bắt đầu huấn luyện.")
+    st.info("Bấm TÀI hoặc XỈU để nhập dữ liệu lịch sử, sau đó bấm **Huấn luyện lại**.")
 else:
     st.markdown("### 🧾 Lịch sử:")
     safe_history = [str(x) for x in st.session_state.history[-40:] if x is not None]
@@ -240,7 +245,7 @@ for i, m in enumerate(models):
         <div class="card">
             <div class="model-name">{name}</div>
             <div class="small">Dự đoán:</div>
-            <div class="pred">{pred if pred else 'Chưa đủ dữ liệu'}</div>
+            <div class="pred">{pred if pred else 'Chưa huấn luyện'}</div>
             <div class="small">Xác suất: {prob:.1%}</div>
             <div class="small">Tỉ lệ thắng: {rate:.1%} ({win}/{total})</div>
         </div>
