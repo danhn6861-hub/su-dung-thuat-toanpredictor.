@@ -30,6 +30,8 @@ if "ai_last_pred" not in st.session_state:
     st.session_state.ai_last_pred = None
 if "undo_stack" not in st.session_state:
     st.session_state.undo_stack = []
+if "is_processing" not in st.session_state:
+    st.session_state.is_processing = False  # Khóa để ngăn double-click
 
 # ====== Hàm tạo đặc trưng ======
 def create_features(history, window=6):
@@ -44,7 +46,7 @@ def create_features(history, window=6):
 
 # ====== Huấn luyện các mô hình với cải thiện ======
 @st.cache_resource
-def train_models(history_tuple, ai_confidence_tuple):
+def train_models(history_tuple, ai_confidence_tuple, _cache_key):
     history = list(history_tuple)
     ai_confidence = list(ai_confidence_tuple)
     X, y = create_features(history)
@@ -58,11 +60,16 @@ def train_models(history_tuple, ai_confidence_tuple):
             st.warning("Dữ liệu không cân bằng (toàn Tài hoặc Xỉu). Mô hình có thể không chính xác.")
             return None
 
-        # TimeSeriesSplit để tránh data leakage
-        n_splits = min(3, len(X) // 3)  # Đảm bảo đủ mẫu cho mỗi split
+        # TimeSeriesSplit với số splits động
+        n_splits = min(3, len(X) // 4)  # Mỗi split cần ít nhất 4 mẫu
         if n_splits < 2:
-            st.warning("Dữ liệu quá ít để thực hiện cross-validation. Cần thêm ván.")
-            return None
+            # Fallback: Fit trực tiếp nếu không đủ dữ liệu cho CV
+            st.warning("Dữ liệu quá ít để cross-validation, huấn luyện trực tiếp...")
+            recent_weight = np.linspace(0.5, 1.0, len(y))
+            combined_weight = recent_weight * np.array(ai_confidence[:len(y)]) if len(ai_confidence) >= len(y) else recent_weight
+            stack = LogisticRegression().fit(X, y, sample_weight=combined_weight)  # Simple fallback
+            return stack
+
         tscv = TimeSeriesSplit(n_splits=n_splits)
 
         # AI Strategy – học trọng số theo thời gian và độ tin cậy
@@ -83,7 +90,7 @@ def train_models(history_tuple, ai_confidence_tuple):
 
         # Stacking classifier
         stack = StackingClassifier(estimators=estimators, final_estimator=LogisticRegression(), cv=tscv)
-        stack.fit(X, y)  # Không áp dụng sample_weight cho stacking
+        stack.fit(X, y)
 
         # Đánh giá mô hình
         if len(X) > 20:
@@ -120,32 +127,48 @@ def predict_next(models, history):
     if len(history) < 6 or models is None:
         return None, None
 
-    latest = np.array([[1 if x == "Tài" else 0 for x in history[-6:]]])
-    stack_prob = models.predict_proba(latest)[0][1]
-    pattern_score = pattern_detector(history)
-    final_score = 0.7 * stack_prob + 0.3 * pattern_score
-    return {"Stacking Model": stack_prob, "Pattern Detector": pattern_score}, final_score
+    try:
+        latest = np.array([[1 if x == "Tài" else 0 for x in history[-6:]]])
+        stack_prob = models.predict_proba(latest)[0][1]
+        pattern_score = pattern_detector(history)
+        final_score = 0.7 * stack_prob + 0.3 * pattern_score
+        return {"Stacking Model": stack_prob, "Pattern Detector": pattern_score}, final_score
+    except Exception as e:
+        st.error(f"Lỗi dự đoán: {str(e)}")
+        return None, None
 
 # ====== Hàm thêm kết quả với undo ======
 def add_result(result):
+    if st.session_state.is_processing:
+        return  # Ngăn double-click
     if result not in ["Tài", "Xỉu"]:
         st.error(f"Kết quả không hợp lệ: {result}")
         return
-    st.session_state.undo_stack.append((st.session_state.history.copy(), st.session_state.ai_confidence.copy()))
-    st.session_state.history.append(result)
-    if len(st.session_state.history) > 200:
-        st.session_state.history = st.session_state.history[-200:]
-        st.session_state.ai_confidence = st.session_state.ai_confidence[-200:]
-    if st.session_state.ai_last_pred is not None:
-        was_correct = (st.session_state.ai_last_pred == result)
-        st.session_state.ai_confidence.append(1.2 if was_correct else 0.8)
+    st.session_state.is_processing = True
+    try:
+        st.session_state.undo_stack.append((st.session_state.history.copy(), st.session_state.ai_confidence.copy()))
+        st.session_state.history.append(result)
+        if len(st.session_state.history) > 200:
+            st.session_state.history = st.session_state.history[-200:]
+            st.session_state.ai_confidence = st.session_state.ai_confidence[-200:]
+        if st.session_state.ai_last_pred is not None:
+            was_correct = (st.session_state.ai_last_pred == result)
+            st.session_state.ai_confidence.append(1.2 if was_correct else 0.8)
+    finally:
+        st.session_state.is_processing = False
 
 # ====== Hàm undo ======
 def undo_last():
-    if st.session_state.undo_stack:
-        history, confidence = st.session_state.undo_stack.pop()
-        st.session_state.history = history
-        st.session_state.ai_confidence = confidence
+    if st.session_state.is_processing:
+        return
+    st.session_state.is_processing = True
+    try:
+        if st.session_state.undo_stack:
+            history, confidence = st.session_state.undo_stack.pop()
+            st.session_state.history = history
+            st.session_state.ai_confidence = confidence
+    finally:
+        st.session_state.is_processing = False
 
 # ====== Export/Import lịch sử ======
 def export_history():
@@ -166,6 +189,7 @@ def import_history(uploaded_file):
                 return
             st.session_state.history = history
             st.session_state.ai_confidence = [1.0] * len(history)
+            st.session_state.undo_stack = []  # Reset undo stack
             st.success("Đã import lịch sử!")
         except Exception as e:
             st.error(f"Lỗi khi import: {str(e)}")
@@ -183,7 +207,7 @@ def plot_history(history):
     buf = io.BytesIO()
     fig.savefig(buf, format="png")
     buf.seek(0)
-    plt.close(fig)  # Đóng figure để tránh memory leak
+    plt.close(fig)
     return base64.b64encode(buf.read()).decode('utf-8')
 
 # ====== Giao diện ======
@@ -228,12 +252,12 @@ st.divider()
 # Nút nhập kết quả với key unique
 col_tai, col_xiu = st.columns(2)
 with col_tai:
-    if st.button("Nhập Tài", key="add_tai"):
+    if st.button("Nhập Tài", key="add_tai", disabled=st.session_state.is_processing):
         add_result("Tài")
         st.success("Đã thêm Tài!")
         st.rerun()
 with col_xiu:
-    if st.button("Nhập Xỉu", key="add_xiu"):
+    if st.button("Nhập Xỉu", key="add_xiu", disabled=st.session_state.is_processing):
         add_result("Xỉu")
         st.success("Đã thêm Xỉu!")
         st.rerun()
@@ -243,7 +267,8 @@ st.divider()
 # Huấn luyện
 if st.button("⚙️ Huấn luyện lại từ lịch sử", key="train_models"):
     with st.spinner("Đang huấn luyện các mô hình..."):
-        st.session_state.models = train_models(tuple(st.session_state.history), tuple(st.session_state.ai_confidence))
+        cache_key = str(len(st.session_state.history)) + str(st.session_state.history[-10:])  # Tạo key động
+        st.session_state.models = train_models(tuple(st.session_state.history), tuple(st.session_state.ai_confidence), cache_key)
     if st.session_state.models is not None:
         st.success("✅ Huấn luyện thành công!")
 
@@ -252,16 +277,13 @@ if len(st.session_state.history) >= 6:
     if st.session_state.models is None:
         st.info("Vui lòng huấn luyện mô hình trước.")
     else:
-        try:
-            preds, final_score = predict_next(st.session_state.models, st.session_state.history)
-            if preds:
-                st.session_state.ai_last_pred = "Tài" if final_score >= 0.5 else "Xỉu"
-                st.subheader(f"🎯 Dự đoán chung: **{st.session_state.ai_last_pred}** ({final_score:.2%})")
-                st.caption("Tổng hợp từ Stacking Model + Pattern Detector:")
-                for k, v in preds.items():
-                    st.write(f"**{k}** → {v:.2%}")
-        except Exception as e:
-            st.error(f"Lỗi dự đoán: {str(e)}")
+        preds, final_score = predict_next(st.session_state.models, st.session_state.history)
+        if preds:
+            st.session_state.ai_last_pred = "Tài" if final_score >= 0.5 else "Xỉu"
+            st.subheader(f"🎯 Dự đoán chung: **{st.session_state.ai_last_pred}** ({final_score:.2%})")
+            st.caption("Tổng hợp từ Stacking Model + Pattern Detector:")
+            for k, v in preds.items():
+                st.write(f"**{k}** → {v:.2%}")
 else:
     st.warning("Cần ít nhất 6 ván để bắt đầu dự đoán.")
 
