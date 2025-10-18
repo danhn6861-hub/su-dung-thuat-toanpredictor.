@@ -1,544 +1,507 @@
+# file: app.py
 import streamlit as st
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, VotingClassifier
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import accuracy_score
-import matplotlib.pyplot as plt
-import io
-import base64
 from datetime import datetime
 import random
+from collections import deque, Counter
+import plotly.graph_objects as go
+import joblib
+import tempfile
+import io
 
-st.set_page_config(page_title="AI Tài/Xỉu - Chiến Thuật Thông Minh", layout="wide")
+st.set_page_config(page_title="AI Tài/Xỉu - Fusion Turbo v2", layout="wide")
 
-# ====== TRIẾT LÝ CHIẾN THUẬT ======
-"""
-TRIẾT LÝ CHIẾN THUẬT THÔNG MINH:
-1. KHÔNG điều chỉnh trọng số dựa trên vài ván thắng/thua ngắn hạn
-2. CHỈ thay đổi chiến lược khi có bằng chứng THỐNG KÊ đủ mạnh
-3. ƯU TIÊN sự ỔN ĐỊNH thay vì tối ưu hóa liên tục
-4. PHÂN BIỆT rõ may mắn ngắn hạn vs kỹ năng thực sự
-"""
-
-# ====== KHỞI TẠO TRẠNG THÁI THÔNG MINH ======
-if "history" not in st.session_state:
-    st.session_state.history = []
-if "strategic_memory" not in st.session_state:
-    st.session_state.strategic_memory = {
-        'model_performance': {'wins': 0, 'total': 0, 'confidence': 0.5},
-        'pattern_performance': {'wins': 0, 'total': 0, 'confidence': 0.5},
-        'current_phase': 'balanced',  # balanced, tai_streak, xiu_streak, volatile
-        'phase_duration': 0,
-        'strategic_weights': {'model': 0.6, 'pattern': 0.4},
-        'last_weight_adjustment': 0,
-        'performance_tracking': []
-    }
-if "models" not in st.session_state:
-    st.session_state.models = None
-if "ai_last_pred" not in st.session_state:
-    st.session_state.ai_last_pred = None
-if "last_prediction_details" not in st.session_state:
-    st.session_state.last_prediction_details = None
-if "undo_stack" not in st.session_state:
-    st.session_state.undo_stack = []
-
-# ====== PHÂN TÍCH THỐNG KÊ THÔNG MINH ======
-def analyze_market_phase(history):
-    """Phân tích phase thị trường với độ tin cậy thống kê"""
-    if len(history) < 20:
-        return 'balanced', 0.5
-    
-    # Phân tích xu hướng ngắn hạn (5 ván)
-    short_term = history[-5:] if len(history) >= 5 else history
-    tai_short = sum(1 for x in short_term if x == "Tài") / len(short_term)
-    
-    # Phân tích xu hướng trung hạn (15 ván)
-    med_term = history[-15:] if len(history) >= 15 else history
-    tai_med = sum(1 for x in med_term if x == "Tài") / len(med_term)
-    
-    # Phân tích biến động
-    changes = sum(1 for i in range(1, len(short_term)) if short_term[i] != short_term[i-1])
-    volatility = changes / (len(short_term) - 1) if len(short_term) > 1 else 0.5
-    
-    # Xác định phase với ngưỡng thống kê
-    if abs(tai_med - 0.5) < 0.2 and volatility > 0.6:
-        return 'volatile', volatility
-    elif tai_med > 0.7:
-        return 'tai_streak', tai_med
-    elif tai_med < 0.3:
-        return 'xiu_streak', 1 - tai_med
-    else:
-        return 'balanced', 0.5
-
-def should_adjust_weights(strategic_memory, current_phase, phase_confidence):
-    """Quyết định THÔNG MINH có nên điều chỉnh trọng số không"""
-    memory = strategic_memory
-    
-    # LUẬT 1: Không điều chỉnh quá thường xuyên
-    games_since_last_adjust = len(st.session_state.history) - memory['last_weight_adjustment']
-    if games_since_last_adjust < 10:  # Tối thiểu 10 ván giữa các lần điều chỉnh
-        return False, "Điều chỉnh quá gần nhau"
-    
-    # LUẬT 2: Cần đủ dữ liệu thống kê
-    min_games_for_adjustment = 30
-    if len(st.session_state.history) < min_games_for_adjustment:
-        return False, f"Cần ít nhất {min_games_for_adjustment} ván"
-    
-    # LUẬT 3: Chênh lệch hiệu suất phải đủ lớn và có ý nghĩa thống kê
-    model_perf = memory['model_performance']
-    pattern_perf = memory['pattern_performance']
-    
-    if model_perf['total'] < 20 or pattern_perf['total'] < 20:
-        return False, "Chưa đủ dữ liệu đánh giá hiệu suất"
-    
-    model_win_rate = model_perf['wins'] / model_perf['total']
-    pattern_win_rate = pattern_perf['wins'] / pattern_perf['total']
-    performance_gap = abs(model_win_rate - pattern_win_rate)
-    
-    # Ngưỡng chênh lệch hiệu suất để điều chỉnh (15%)
-    if performance_gap < 0.15:
-        return False, f"Chênh lệch hiệu suất {performance_gap:.1%} quá nhỏ"
-    
-    # LUẬT 4: Phase thị trường ảnh hưởng đến quyết định
-    if current_phase == 'volatile' and phase_confidence > 0.7:
-        # Trong phase biến động, ưu tiên pattern detection
-        return True, "Phase biến động - Ưu tiên pattern"
-    elif current_phase in ['tai_streak', 'xiu_streak'] and phase_confidence > 0.7:
-        # Trong phase trend rõ, ưu tiên model
-        return True, "Phase trend rõ - Ưu tiên model"
-    elif performance_gap > 0.2:  # Chênh lệch rất lớn
-        return True, f"Chênh lệch hiệu suất lớn: {performance_gap:.1%}"
-    
-    return False, "Không đủ điều kiện điều chỉnh"
-
-def calculate_strategic_weights(strategic_memory, current_phase):
-    """Tính toán trọng số CHIẾN LƯỢC thay vì tự động"""
-    memory = strategic_memory
-    model_perf = memory['model_performance']
-    pattern_perf = memory['pattern_performance']
-    
-    # Tính win rate với độ tin cậy
-    model_win_rate = model_perf['wins'] / model_perf['total'] if model_perf['total'] > 0 else 0.5
-    pattern_win_rate = pattern_perf['wins'] / pattern_perf['total'] if pattern_perf['total'] > 0 else 0.5
-    
-    # Base weights dựa trên hiệu suất
-    total_performance = model_win_rate + pattern_win_rate
-    if total_performance > 0:
-        base_model_weight = model_win_rate / total_performance
-        base_pattern_weight = pattern_win_rate / total_performance
-    else:
-        base_model_weight, base_pattern_weight = 0.6, 0.4
-    
-    # Điều chỉnh theo phase thị trường
-    if current_phase == 'volatile':
-        # Phase biến động: pattern detection quan trọng hơn
-        final_model_weight = base_model_weight * 0.7
-        final_pattern_weight = base_pattern_weight * 1.3
-    elif current_phase in ['tai_streak', 'xiu_streak']:
-        # Phase trend: model quan trọng hơn
-        final_model_weight = base_model_weight * 1.3
-        final_pattern_weight = base_pattern_weight * 0.7
-    else:
-        # Phase cân bằng
-        final_model_weight = base_model_weight
-        final_pattern_weight = base_pattern_weight
-    
-    # Chuẩn hóa và đảm bảo trọng số hợp lý
-    total = final_model_weight + final_pattern_weight
-    model_weight = max(0.3, min(0.8, final_model_weight / total))
-    pattern_weight = max(0.2, min(0.7, final_pattern_weight / total))
-    
-    # Chuẩn hóa lần cuối
-    total = model_weight + pattern_weight
-    return {
-        'model': model_weight / total,
-        'pattern': pattern_weight / total
-    }
-
-# ====== HỆ THỐNG DỰ ĐOÁN CHIẾN LƯỢC ======
-def strategic_prediction_system(models, history):
-    """Hệ thống dự đoán với tư duy chiến thuật"""
-    if len(history) < 5 or models is None:
-        return None, None, "insufficient_data"
-    
-    try:
-        # Phân tích phase thị trường hiện tại
-        current_phase, phase_confidence = analyze_market_phase(history)
-        
-        # Quyết định chiến lược
-        should_adjust, reason = should_adjust_weights(
-            st.session_state.strategic_memory, current_phase, phase_confidence
-        )
-        
-        if should_adjust:
-            new_weights = calculate_strategic_weights(st.session_state.strategic_memory, current_phase)
-            st.session_state.strategic_memory['strategic_weights'] = new_weights
-            st.session_state.strategic_memory['last_weight_adjustment'] = len(history)
-            st.session_state.strategic_memory['last_adjustment_reason'] = reason
-        
-        # Dự đoán cơ bản
-        X, _ = create_features_improved(history)
-        if len(X) == 0:
-            return None, None, "insufficient_data"
-            
-        latest = X[-1:].reshape(1, -1)
-        model_prob = models.predict_proba(latest)[0][1]
-        pattern_prob = intelligent_pattern_detector(history, current_phase)
-        
-        # Áp dụng trọng số chiến lược
-        weights = st.session_state.strategic_memory['strategic_weights']
-        final_score = (weights['model'] * model_prob + 
-                      weights['pattern'] * pattern_prob)
-        
-        prediction_details = {
-            "Model Probability": model_prob,
-            "Pattern Analysis": pattern_prob,
-            "Market Phase": current_phase,
-            "Phase Confidence": phase_confidence,
-            "Strategic Weights": weights.copy(),
-            "Adjustment Recommended": should_adjust,
-            "Adjustment Reason": reason if should_adjust else "Giữ nguyên chiến lược"
-        }
-        
-        return prediction_details, final_score, "strategic"
-        
-    except Exception as e:
-        st.error(f"Lỗi hệ thống chiến thuật: {str(e)}")
-        return None, None, "error"
-
-def intelligent_pattern_detector(history, market_phase):
-    """Phát hiện pattern thông minh theo phase thị trường"""
-    if len(history) < 5:
-        return 0.5
-    
-    # Phân tích cơ bản
-    short_term = history[-5:] if len(history) >= 5 else history
-    med_term = history[-10:] if len(history) >= 10 else history
-    
-    tai_short = sum(1 for x in short_term if x == "Tài") / len(short_term)
-    tai_med = sum(1 for x in med_term if x == "Tài") / len(med_term)
-    
-    # Điều chỉnh logic theo phase
-    if market_phase == 'volatile':
-        # Phase biến động: mean reversion mạnh
-        if tai_short > 0.7:
-            return 0.3  # Thiên về Xỉu sau nhiều Tài
-        elif tai_short < 0.3:
-            return 0.7  # Thiên về Tài sau nhiều Xỉu
-        else:
-            return 0.5
-            
-    elif market_phase in ['tai_streak', 'xiu_streak']:
-        # Phase trend: follow trend
-        return tai_med  # Theo xu hướng trung hạn
-        
-    else:
-        # Phase cân bằng: kết hợp
-        streak_length = 1
-        for i in range(2, min(6, len(history)) + 1):
-            if history[-i] == history[-1]:
-                streak_length += 1
-            else:
-                break
-                
-        if streak_length >= 3:
-            # Chuỗi dài -> mean reversion
-            return 0.4 if history[-1] == "Tài" else 0.6
-        else:
-            return (tai_short * 0.6 + tai_med * 0.4)
-
-# ====== CẬP NHẬT HIỆU SUẤT THÔNG MINH ======
-def update_strategic_performance(actual_result, prediction_details):
-    """Cập nhật hiệu suất với sự thận trọng"""
-    memory = st.session_state.strategic_memory
-    predicted_tai = prediction_details['Model Probability'] > 0.5
-    pattern_tai = prediction_details['Pattern Analysis'] > 0.5
-    
-    actual_tai = (actual_result == "Tài")
-    
-    # Cập nhật hiệu suất model
-    memory['model_performance']['total'] += 1
-    if predicted_tai == actual_tai:
-        memory['model_performance']['wins'] += 1
-    
-    # Cập nhật hiệu suất pattern
-    memory['pattern_performance']['total'] += 1
-    if pattern_tai == actual_tai:
-        memory['pattern_performance']['wins'] += 1
-    
-    # Cập nhật phase tracking
-    current_phase, _ = analyze_market_phase(st.session_state.history)
-    if current_phase == memory['current_phase']:
-        memory['phase_duration'] += 1
-    else:
-        memory['current_phase'] = current_phase
-        memory['phase_duration'] = 1
-    
-    # Lưu tracking hiệu suất
-    memory['performance_tracking'].append({
-        'game': len(st.session_state.history),
-        'model_win_rate': memory['model_performance']['wins'] / memory['model_performance']['total'],
-        'pattern_win_rate': memory['pattern_performance']['wins'] / memory['pattern_performance']['total'],
-        'phase': current_phase
-    })
-
-# ====== CÁC HÀM CƠ BẢN ======
-def create_features_improved(history, window=5):
-    if len(history) < window + 1:
-        return np.empty((0, window + 2)), np.empty((0,))
-    
-    X = []
-    y = []
-    
-    for i in range(window, len(history)):
-        base_features = [1 if x == "Tài" else 0 for x in history[i - window:i]]
-        tai_count = sum(base_features)
-        tai_ratio = tai_count / window
-        
-        changes = 0
-        for j in range(1, len(base_features)):
-            if base_features[j] != base_features[j-1]:
-                changes += 1
-        change_ratio = changes / (window - 1) if window > 1 else 0
-        
-        combined_features = base_features + [tai_ratio, change_ratio]
-        X.append(combined_features)
-        y.append(1 if history[i] == "Tài" else 0)
-    
-    return np.array(X), np.array(y)
-
-@st.cache_resource
-def train_models_improved(history_tuple, _cache_key):
-    history = list(history_tuple)
-    X, y = create_features_improved(history)
-    
-    if len(X) < 15:
-        st.warning("Cần ít nhất 15 ván để huấn luyện mô hình ổn định.")
-        return None
-
-    try:
-        tscv = TimeSeriesSplit(n_splits=min(4, len(X)//5))
-        
-        lr = LogisticRegression(C=0.5, random_state=42, max_iter=1000)
-        rf = RandomForestClassifier(n_estimators=50, max_depth=6, random_state=42)
-        
-        voting = VotingClassifier(estimators=[('lr', lr), ('rf', rf)], voting='soft')
-        voting.fit(X, y)
-        
-        return voting
-
-    except Exception as e:
-        st.error(f"Lỗi huấn luyện: {str(e)}")
-        return None
-
-# ====== HÀM THÊM KẾT QUẢ ======
-def add_result(result):
-    if result not in ["Tài", "Xỉu"]:
-        st.error(f"Kết quả không hợp lệ: {result}")
-        return
-    
-    # Lưu trạng thái hiện tại để undo
-    st.session_state.undo_stack.append({
-        'history': st.session_state.history.copy(),
-        'strategic_memory': st.session_state.strategic_memory.copy(),
-        'ai_last_pred': st.session_state.ai_last_pred,
-        'last_prediction_details': st.session_state.last_prediction_details
-    })
-    
-    # Thêm kết quả mới
-    st.session_state.history.append(result)
-    
-    # Cập nhật hiệu suất nếu có dự đoán trước đó
-    if st.session_state.last_prediction_details is not None:
-        update_strategic_performance(result, st.session_state.last_prediction_details)
-
-# ====== HÀM UNDO ======
-def undo_last():
-    if st.session_state.undo_stack:
-        last_state = st.session_state.undo_stack.pop()
-        st.session_state.history = last_state['history']
-        st.session_state.strategic_memory = last_state['strategic_memory']
-        st.session_state.ai_last_pred = last_state['ai_last_pred']
-        st.session_state.last_prediction_details = last_state['last_prediction_details']
-
-# ====== GIAO DIỆN CHIẾN LƯỢC ======
-st.title("🎯 AI Tài/Xỉu - Chiến Thuật Thông Minh & Ổn Định")
-
-# Hiển thị trạng thái chiến lược
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    phase = st.session_state.strategic_memory['current_phase']
-    phase_duration = st.session_state.strategic_memory['phase_duration']
-    st.metric("📊 Phase Thị Trường", phase, delta=f"{phase_duration} ván")
-with col2:
-    model_perf = st.session_state.strategic_memory['model_performance']
-    model_win_rate = model_perf['wins'] / model_perf['total'] if model_perf['total'] > 0 else 0
-    st.metric("🤖 Model Win Rate", f"{model_win_rate:.1%}")
-with col3:
-    pattern_perf = st.session_state.strategic_memory['pattern_performance']
-    pattern_win_rate = pattern_perf['wins'] / pattern_perf['total'] if pattern_perf['total'] > 0 else 0
-    st.metric("🔍 Pattern Win Rate", f"{pattern_win_rate:.1%}")
-with col4:
-    weights = st.session_state.strategic_memory['strategic_weights']
-    adjustment_games = len(st.session_state.history) - st.session_state.strategic_memory.get('last_weight_adjustment', 0)
-    st.metric("⚖️ Chiến Lược", f"M:{weights['model']:.0%} P:{weights['pattern']:.0%}", delta=f"{adjustment_games}ván")
-
-# Hiển thị lịch sử gần đây
-st.subheader("📊 Lịch sử gần đây")
-if st.session_state.history:
-    # Hiển thị 20 kết quả gần nhất
-    recent_history = st.session_state.history[-20:]
-    history_text = " → ".join(recent_history)
-    st.write(history_text)
-else:
-    st.info("Chưa có dữ liệu. Hãy bắt đầu nhập kết quả!")
-
-# Biểu đồ hiệu suất
-if st.session_state.strategic_memory['performance_tracking']:
-    st.subheader("📈 Biểu Đồ Hiệu Suất Chiến Thuật")
-    tracking = st.session_state.strategic_memory['performance_tracking']
-    
-    games = [x['game'] for x in tracking]
-    model_rates = [x['model_win_rate'] for x in tracking]
-    pattern_rates = [x['pattern_win_rate'] for x in tracking]
-    
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(games, model_rates, label='Model Win Rate', linewidth=2)
-    ax.plot(games, pattern_rates, label='Pattern Win Rate', linewidth=2)
-    ax.axhline(y=0.5, color='red', linestyle='--', alpha=0.5, label='Ngưỡng 50%')
-    ax.set_ylabel("Tỷ lệ thắng")
-    ax.set_xlabel("Số ván")
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    st.pyplot(fig)
-
-# Nhập liệu
-st.divider()
-st.subheader("🎮 Nhập kết quả")
-
-col_tai, col_xiu, col_undo = st.columns([1, 1, 1])
-with col_tai:
-    if st.button("🎲 NHẬP TÀI", key="add_tai", use_container_width=True):
-        add_result("Tài")
-        st.success("Đã thêm Tài!")
-        st.rerun()
-        
-with col_xiu:
-    if st.button("🎲 NHẬP XỈU", key="add_xiu", use_container_width=True):
-        add_result("Xỉu")
-        st.success("Đã thêm Xỉu!")
-        st.rerun()
-
-with col_undo:
-    if st.button("↩️ UNDO", key="undo", use_container_width=True):
-        undo_last()
-        st.success("Đã hoàn tác!")
-        st.rerun()
-
-# Huấn luyện và dự đoán
-st.divider()
-st.subheader("🤖 Huấn luyện AI")
-
-if st.button("🚀 Huấn luyện Hệ Thống", key="train_system", use_container_width=True):
-    if len(st.session_state.history) < 15:
-        st.warning("Cần ít nhất 15 ván để huấn luyện!")
-    else:
-        with st.spinner("Đang huấn luyện với chiến lược ổn định..."):
-            cache_key = str(len(st.session_state.history)) + str(st.session_state.history[-10:])
-            st.session_state.models = train_models_improved(tuple(st.session_state.history), cache_key)
-        if st.session_state.models is not None:
-            st.success("✅ Hệ thống đã sẵn sàng với chiến lược thông minh!")
-
-# Dự đoán chiến lược
-st.divider()
-st.subheader("🔮 Dự đoán")
-
-if len(st.session_state.history) >= 5:
-    if st.session_state.models is None:
-        st.info("Vui lòng huấn luyện mô hình trước khi dự đoán.")
-    else:
-        pred_details, final_score, strategy = strategic_prediction_system(
-            st.session_state.models, st.session_state.history
-        )
-        
-        if pred_details:
-            st.session_state.ai_last_pred = "Tài" if final_score >= 0.5 else "Xỉu"
-            st.session_state.last_prediction_details = pred_details
-            
-            confidence = final_score if st.session_state.ai_last_pred == "Tài" else 1 - final_score
-            
-            st.subheader(f"🎯 Dự Đoán: **{st.session_state.ai_last_pred}** ({confidence:.1%} confidence)")
-            
-            # Hiển thị phân tích chiến lược
-            st.write("**Phân tích chiến thuật:**")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("📈 Market Phase", f"{pred_details['Market Phase']}", 
-                         delta=f"{pred_details['Phase Confidence']:.0%} confidence")
-                st.metric("🤖 Model", f"{pred_details['Model Probability']:.1%}")
-                st.metric("🔍 Pattern", f"{pred_details['Pattern Analysis']:.1%}")
-            
-            with col2:
-                weights = pred_details['Strategic Weights']
-                st.metric("⚖️ Strategic Weights", f"Model: {weights['model']:.0%}")
-                st.metric("", f"Pattern: {weights['pattern']:.0%}")
-                
-                if pred_details['Adjustment Recommended']:
-                    st.warning(f"🔧 Đề xuất điều chỉnh: {pred_details['Adjustment Reason']}")
-                else:
-                    st.info(f"✅ {pred_details['Adjustment Reason']}")
-else:
-    st.info("Cần ít nhất 5 ván để bắt đầu dự đoán.")
-
-# Panel chiến lược
 st.sidebar.markdown("""
-### 🧠 Triết Lý Chiến Thuật
-
-**NGUYÊN TẮC VÀNG:**
-- ✅ **Ổn định > Tối ưu hóa liên tục**
-- ✅ **Thống kê > Cảm tính**
-- ✅ **Kiên nhẫn > Vội vàng**
-
-**LUẬT ĐIỀU CHỈNH:**
-1. Tối thiểu 10 ván giữa các lần điều chỉnh
-2. Cần ít nhất 30 ván để đánh giá hiệu suất  
-3. Chênh lệch hiệu suất phải >15%
-4. Phase thị trường phải rõ ràng (>70% confidence)
-
-**CHIẾN LƯỢC THEO PHASE:**
-- 📊 **Balanced**: Kết hợp cân bằng
-- 📈 **Trend**: Ưu tiên model
-- 📉 **Volatile**: Ưu tiên pattern
+### ⚠️ LƯU Ý
+Ứng dụng mang tính giải trí. Không dùng để đánh bạc thật.
+Phiên bản: Fusion Turbo v2 — speed-optimized.
 """)
 
-# Hiển thị lịch sử điều chỉnh
-if st.sidebar.checkbox("📋 Lịch sử Chiến thuật"):
-    st.sidebar.write("**Hiệu suất hiện tại:**")
-    st.sidebar.write(f"- Model: {st.session_state.strategic_memory['model_performance']['wins']}/{st.session_state.strategic_memory['model_performance']['total']}")
-    st.sidebar.write(f"- Pattern: {st.session_state.strategic_memory['pattern_performance']['wins']}/{st.session_state.strategic_memory['pattern_performance']['total']}")
-    
-    if 'last_adjustment_reason' in st.session_state.strategic_memory:
-        st.sidebar.write(f"**Lần điều chỉnh gần nhất:** {st.session_state.strategic_memory['last_adjustment_reason']}")
+# ================= Evolutionary AI (Optimized) =================
+class EvolutionaryTaiXiuAI:
+    def __init__(self, population_size=200, memory_size=1000, seed=42):
+        self.population_size = int(population_size)
+        self.memory_size = memory_size
+        self.generation = 0
+        self.best_fitness = 0.0
+        self.seed = seed
+        np.random.seed(seed)
+        random.seed(seed)
 
-# Xóa lịch sử
-if st.sidebar.checkbox("🗑️ Xóa toàn bộ lịch sử"):
-    if st.sidebar.button("XÁC NHẬN XÓA", type="primary"):
-        st.session_state.history = []
-        st.session_state.strategic_memory = {
-            'model_performance': {'wins': 0, 'total': 0, 'confidence': 0.5},
-            'pattern_performance': {'wins': 0, 'total': 0, 'confidence': 0.5},
-            'current_phase': 'balanced',
-            'phase_duration': 0,
-            'strategic_weights': {'model': 0.6, 'pattern': 0.4},
-            'last_weight_adjustment': 0,
-            'performance_tracking': []
+        # create agents as lists, but we store weights stacked for vectorized forward
+        self.agents = [self._create_agent_dict() for _ in range(self.population_size)]
+        # also maintain stacked arrays for fast evaluation (created on demand)
+        self._stacked_weights_cached = None
+        self.evolution_history = []
+        self.memory = deque(maxlen=memory_size)
+
+    def _create_agent_dict(self):
+        return {
+            'weights_input': np.random.uniform(-1, 1, (20, 32)).astype(np.float32),
+            'weights_hidden': np.random.uniform(-1, 1, (32, 16)).astype(np.float32),
+            'weights_output': np.random.uniform(-1, 1, (16, 1)).astype(np.float32),
+            'bias_input': np.random.uniform(-0.5, 0.5, 32).astype(np.float32),
+            'bias_hidden': np.random.uniform(-0.5, 0.5, 16).astype(np.float32),
+            'bias_output': np.random.uniform(-0.1, 0.1, 1).astype(np.float32),
+            'fitness': 0.0,
+            'age': 0,
+            'specialization': random.choice(['pattern', 'momentum', 'cycle', 'random'])
         }
-        st.session_state.models = None
-        st.session_state.ai_last_pred = None
-        st.session_state.last_prediction_details = None
-        st.session_state.undo_stack = []
-        st.sidebar.success("Đã xóa toàn bộ lịch sử!")
-        st.rerun()
+
+    # ---------------- feature engineering (unchanged logic) ----------------
+    def create_advanced_features(self, history):
+        # returns np.array shape (20,), dtype float32
+        if len(history) < 10:
+            return np.zeros(20, dtype=np.float32)
+
+        recent = [1 if x == "Tài" else 0 for x in history[-10:]]
+        features = []
+        features.extend([np.mean(recent), np.std(recent), np.sum(recent)])
+        streaks = self._calculate_streaks(history[-10:])
+        features.extend([streaks['current_streak'], streaks['max_streak'], self._entropy(recent)])
+        features.extend(self._technical_indicators(recent))
+        features.extend(self._markov_features(history[-15:]))
+        features.extend(self._cycle_features(recent))
+        features.extend(self._momentum_features(recent))
+        while len(features) < 20:
+            features.append(0.0)
+        return np.array(features[:20], dtype=np.float32)
+
+    def _calculate_streaks(self, history):
+        if not history:
+            return {'current_streak': 0, 'max_streak': 0}
+        current_streak = 1
+        current_type = history[-1]
+        for i in range(len(history)-2, -1, -1):
+            if history[i] == current_type:
+                current_streak += 1
+            else:
+                break
+        streaks = []
+        count = 1
+        for i in range(1, len(history)):
+            if history[i] == history[i-1]:
+                count += 1
+            else:
+                streaks.append(count)
+                count = 1
+        streaks.append(count)
+        return {'current_streak': int(current_streak), 'max_streak': int(max(streaks) if streaks else 1)}
+
+    def _entropy(self, sequence):
+        if len(sequence) == 0:
+            return 0.0
+        seq = np.asarray(sequence, dtype=int)
+        counts = np.bincount(seq)
+        probs = counts / len(seq)
+        return float(-np.sum([p * np.log2(p) for p in probs if p > 0]))
+
+    def _technical_indicators(self, recent):
+        if len(recent) < 5:
+            return [0.0, 0.0, 0.0]
+        sma_3 = float(np.mean(recent[-3:]))
+        sma_5 = float(np.mean(recent[-5:]))
+        momentum = float(recent[-1] - recent[-3]) if len(recent) >= 3 else 0.0
+        return [sma_3, sma_5, momentum]
+
+    def _markov_features(self, history):
+        if len(history) < 3:
+            return [0.5, 0.5]
+        transitions = {'Tài->Tài': 0, 'Tài->Xỉu': 0, 'Xỉu->Tài': 0, 'Xỉu->Xỉu': 0}
+        for i in range(1, len(history)):
+            t = f"{history[i-1]}->{history[i]}"
+            if t in transitions:
+                transitions[t] += 1
+        tai_total = transitions['Tài->Tài'] + transitions['Tài->Xỉu']
+        xiu_total = transitions['Xỉu->Tài'] + transitions['Xỉu->Xỉu']
+        p_tai_tai = transitions['Tài->Tài'] / tai_total if tai_total > 0 else 0.5
+        p_xiu_tai = transitions['Xỉu->Tài'] / xiu_total if xiu_total > 0 else 0.5
+        return [float(p_tai_tai), float(p_xiu_tai)]
+
+    def _cycle_features(self, recent):
+        if len(recent) < 6:
+            return [0.0, 0.0]
+        correlations = []
+        for cycle_len in range(2, 5):
+            if len(recent) >= cycle_len * 2:
+                correlations.append(float(self._cycle_correlation(recent, cycle_len)))
+            else:
+                correlations.append(0.0)
+        return correlations[:2]
+
+    def _cycle_correlation(self, sequence, cycle_len):
+        cycles = []
+        for i in range(0, len(sequence) - cycle_len, cycle_len):
+            cycles.append(sequence[i:i+cycle_len])
+        if len(cycles) < 2:
+            return 0.0
+        sims = []
+        for i in range(len(cycles)-1):
+            a = np.asarray(cycles[i], dtype=float)
+            b = np.asarray(cycles[i+1], dtype=float)
+            if a.size == b.size and a.size > 1:
+                sim = np.corrcoef(a, b)[0,1]
+                if not np.isnan(sim):
+                    sims.append(sim)
+        return float(np.mean(sims)) if sims else 0.0
+
+    def _momentum_features(self, recent):
+        if len(recent) < 4:
+            return [0.0, 0.0]
+        roc = float(recent[-1] - recent[-4]) if len(recent) >= 4 else 0.0
+        try:
+            trend = float(np.polyfit(range(len(recent)), np.asarray(recent, dtype=float), 1)[0])
+        except Exception:
+            trend = 0.0
+        return [roc, trend]
+
+    # ---------------- vectorized forward for many agents & windows ----------------
+    def _stack_weights(self):
+        """Create stacked weight arrays for vectorized evaluation.
+        Returns shapes:
+          W1: (n_agents, 20, 32)
+          b1: (n_agents, 32)
+          W2: (n_agents, 32, 16)
+          b2: (n_agents, 16)
+          W3: (n_agents, 16, 1)
+          b3: (n_agents, 1)
+        """
+        if self._stacked_weights_cached is not None:
+            return self._stacked_weights_cached
+        n = len(self.agents)
+        W1 = np.stack([a['weights_input'] for a in self.agents], axis=0)  # (n,20,32)
+        b1 = np.stack([a['bias_input'] for a in self.agents], axis=0)     # (n,32)
+        W2 = np.stack([a['weights_hidden'] for a in self.agents], axis=0) # (n,32,16)
+        b2 = np.stack([a['bias_hidden'] for a in self.agents], axis=0)    # (n,16)
+        W3 = np.stack([a['weights_output'] for a in self.agents], axis=0) # (n,16,1)
+        b3 = np.stack([a['bias_output'] for a in self.agents], axis=0)    # (n,1)
+        self._stacked_weights_cached = (W1, b1, W2, b2, W3, b3)
+        return self._stacked_weights_cached
+
+    def _vectorized_predict_probs(self, features):  # features: (n_windows, 20)
+        """Return array shape (n_agents, n_windows) of probabilities."""
+        # features: (W, 20)
+        W1, b1, W2, b2, W3, b3 = self._stack_weights()
+        # compute hidden1: einsum -> (n_agents, n_windows, 32)
+        # einsum 'wf,naf->nwf' with rename: features 'wf' w windows, f features; W1 'naf' n agents, a features(?)
+        # We'll use 'wf,nfd->nwd' pattern:
+        hidden1 = np.tanh(np.einsum('wf,nfd->nwd', features, W1) + b1[:, np.newaxis, :])  # (n, W, 32)
+        hidden2 = np.tanh(np.einsum('nwd,ndh->nwh', hidden1, W2) + b2[:, np.newaxis, :])  # (n, W, 16)
+        out = 1.0 / (1.0 + np.exp(-(np.einsum('nwh,nho->nwo', hidden2, W3) + b3[:, np.newaxis, :])))  # (n, W, 1)
+        out = np.squeeze(out, axis=2)  # (n, W)
+        return out.astype(np.float32)
+
+    # ---------------- evaluate agents using vectorized ops ----------------
+    def evaluate_agents(self, history, max_recent=50):
+        """Vectorized evaluation.
+        - history: full serial list
+        - We use at most last `max_recent` samples (default 50) to build sliding windows.
+        """
+        if len(history) < 20:
+            return
+
+        # Prepare recent history (cap to max_recent for speed)
+        recent = history[-max_recent:]
+        # Build sliding windows: for i in [10 .. len(recent)-1], we evaluate using window recent[:i]
+        windows = []
+        actuals = []
+        for i in range(10, len(recent)):
+            window = recent[:i]
+            windows.append(self.create_advanced_features(window))
+            actuals.append(1 if recent[i] == "Tài" else 0)
+        if not windows:
+            return
+        features = np.stack(windows, axis=0).astype(np.float32)  # (W,20)
+        actuals = np.array(actuals, dtype=np.int8)  # (W,)
+
+        # Compute predictions for all agents and windows at once
+        W1, b1, W2, b2, W3, b3 = self._stack_weights()
+        # Compute probs: shape (n_agents, n_windows)
+        probs = self._vectorized_predict_probs(features)  # (n_agents, W)
+
+        # Convert to binary predictions and compute accuracy per agent
+        preds = (probs > 0.5).astype(np.int8)  # (n_agents, W)
+        # actuals broadcast: compute correct counts
+        correct_counts = np.sum(preds == actuals[np.newaxis, :], axis=1)  # (n_agents,)
+        totals = features.shape[0]
+        accuracies = correct_counts / totals
+
+        # Apply age bonus and update fitness
+        ages = np.array([a['age'] for a in self.agents], dtype=np.float32)
+        age_bonus = np.minimum(ages * 0.01, 0.1)
+        fitnesses = accuracies + age_bonus
+
+        # Update agents
+        for idx, a in enumerate(self.agents):
+            a['fitness'] = float(fitnesses[idx])
+            a['age'] += 1
+
+        # Invalidate stacked cache since fitness changed (selection may use it) - but weights unchanged
+        self._stacked_weights_cached = (W1, b1, W2, b2, W3, b3)
+
+    # ---------------- genetic operators (kept efficient) ----------------
+    def evolve_population(self, elite_frac=0.2, mutation_rate=0.08):
+        self.generation += 1
+        # sort agents by fitness descending
+        self.agents.sort(key=lambda x: x['fitness'], reverse=True)
+        self.best_fitness = float(self.agents[0]['fitness'])
+        n = self.population_size
+        elite_count = max(2, int(n * elite_frac))
+        elites = [dict(a) for a in self.agents[:elite_count]]
+        new_agents = elites.copy()
+
+        # Pre-gather parents for tournament using probabilities to reduce overhead
+        while len(new_agents) < n:
+            p1 = self._tournament_selection()
+            p2 = self._tournament_selection()
+            child = self._crossover_fast(p1, p2)
+            self._mutate_inplace(child, mutation_rate)
+            child['fitness'] = 0.0
+            child['age'] = 0
+            new_agents.append(child)
+
+        self.agents = new_agents
+        # invalidate stacked cache (weights changed)
+        self._stacked_weights_cached = None
+        # record evolution summary
+        self.evolution_history.append({
+            'generation': self.generation,
+            'best_fitness': float(self.best_fitness),
+            'avg_fitness': float(np.mean([a['fitness'] for a in self.agents])),
+            'diversity': self._population_diversity()
+        })
+
+    def _tournament_selection(self, k=3):
+        # simple random sample tournament
+        tour = random.sample(self.agents, k)
+        return max(tour, key=lambda x: x['fitness'])
+
+    def _crossover_fast(self, p1, p2):
+        # uniform crossover for weights/bias with numpy for speed
+        child = self._create_agent_dict()
+        for key in ['weights_input', 'weights_hidden', 'weights_output']:
+            a = p1[key]
+            b = p2[key]
+            mask = np.random.rand(*a.shape) > 0.5
+            child[key] = np.where(mask, a, b).astype(np.float32)
+        for key in ['bias_input', 'bias_hidden', 'bias_output']:
+            a = p1[key]
+            b = p2[key]
+            mask = np.random.rand(*a.shape) > 0.5
+            child[key] = np.where(mask, a, b).astype(np.float32)
+        child['specialization'] = random.choice([p1['specialization'], p2['specialization']])
+        return child
+
+    def _mutate_inplace(self, agent, mutation_rate=0.08):
+        for key in ['weights_input', 'weights_hidden', 'weights_output']:
+            mask = np.random.rand(*agent[key].shape) < mutation_rate
+            mutation = np.random.normal(0, 0.25, agent[key].shape).astype(np.float32)
+            agent[key] = np.where(mask, agent[key] + mutation, agent[key]).astype(np.float32)
+        for key in ['bias_input', 'bias_hidden', 'bias_output']:
+            mask = np.random.rand(*agent[key].shape) < mutation_rate
+            mutation = np.random.normal(0, 0.08, agent[key].shape).astype(np.float32)
+            agent[key] = np.where(mask, agent[key] + mutation, agent[key]).astype(np.float32)
+        if random.random() < 0.04:
+            agent['specialization'] = random.choice(['pattern', 'momentum', 'cycle', 'random'])
+        return agent
+
+    def _population_diversity(self):
+        specs = [a['specialization'] for a in self.agents]
+        return float(len(set(specs)) / 4.0)
+
+    def predict(self, history):
+        # single-agent predict using best current agent
+        if len(history) < 10:
+            return {"Tài": 0.5, "Xỉu": 0.5}, 0.5, "Chưa đủ dữ liệu"
+        features = self.create_advanced_features(history)
+        best_agent = max(self.agents, key=lambda x: x['fitness'])
+        # simple forward for single agent
+        h1 = np.tanh(np.dot(features, best_agent['weights_input']) + best_agent['bias_input'])
+        h2 = np.tanh(np.dot(h1, best_agent['weights_hidden']) + best_agent['bias_hidden'])
+        out = 1.0 / (1.0 + np.exp(-(np.dot(h2, best_agent['weights_output']) + best_agent['bias_output'])))
+        p = float(np.squeeze(out))
+        return {"Tài": p, "Xỉu": 1.0 - p}, p, best_agent['specialization']
+
+# ================= App State Init =================
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "evolution_ai" not in st.session_state:
+    st.session_state.evolution_ai = EvolutionaryTaiXiuAI(population_size=200, seed=42)
+if "ai_predictions" not in st.session_state:
+    st.session_state.ai_predictions = []
+if "training_log" not in st.session_state:
+    st.session_state.training_log = []
+
+# ================= Utilities & UI helpers =================
+def add_result(result):
+    if result not in ("Tài", "Xỉu"):
+        st.error("Kết quả không hợp lệ")
+        return
+    st.session_state.history.append(result)
+    if len(st.session_state.history) > 1000:
+        # keep history reasonable
+        st.session_state.history = st.session_state.history[-1000:]
+    if st.session_state.ai_predictions:
+        last = st.session_state.ai_predictions[-1]
+        was_correct = (last['prediction'] == result)
+        st.session_state.training_log.append({
+            'timestamp': datetime.now(),
+            'prediction': last['prediction'],
+            'actual': result,
+            'correct': was_correct,
+            'confidence': last['confidence'],
+            'strategy': last.get('strategy', '')
+        })
+
+def plot_evolution(history):
+    if not history:
+        return None
+    df = pd.DataFrame(history)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df['generation'], y=df['best_fitness'], mode='lines+markers', name='Best Fitness'))
+    fig.add_trace(go.Scatter(x=df['generation'], y=df['avg_fitness'], mode='lines', name='Avg Fitness'))
+    fig.update_layout(title='Quá trình tiến hóa (fitness)', xaxis_title='Generation', yaxis_title='Fitness', template='plotly_dark')
+    return fig
+
+# ================= UI =================
+st.title("🧠 AI Tài/Xỉu — Fusion Turbo v2 (Fast & Balanced)")
+
+# Sidebar controls
+st.sidebar.header("🎮 Điều khiển AI")
+col_btn = st.sidebar.columns(2)
+with col_btn[0]:
+    if st.button("🔄 Huấn luyện 1 thế hệ"):
+        with st.spinner("Đang huấn luyện 1 thế hệ (vectorized)..."):
+            st.session_state.evolution_ai.evaluate_agents(st.session_state.history)
+            st.session_state.evolution_ai.evolve_population()
+        st.experimental_rerun()
+with col_btn[1]:
+    # advanced: train multiple gens (fast)
+    gens = st.sidebar.number_input("Số thế hệ nhanh", min_value=1, max_value=200, value=5, step=1)
+    if st.sidebar.button("⚡ Huấn luyện N thế hệ (fast)"):
+        with st.spinner(f"Huấn luyện {gens} thế hệ..."):
+            for _ in range(int(gens)):
+                st.session_state.evolution_ai.evaluate_agents(st.session_state.history)
+                st.session_state.evolution_ai.evolve_population()
+        st.experimental_rerun()
+
+if st.sidebar.button("🧹 Khởi tạo lại AI"):
+    st.session_state.evolution_ai = EvolutionaryTaiXiuAI(population_size=200, seed=random.randint(0, 999999))
+    st.session_state.ai_predictions = []
+    st.session_state.training_log = []
+    st.sidebar.success("Đã khởi tạo lại AI")
+
+st.sidebar.markdown("---")
+st.sidebar.header("📈 Thống kê nhanh")
+if st.session_state.evolution_ai.evolution_history:
+    latest = st.session_state.evolution_ai.evolution_history[-1]
+    st.sidebar.write(f"**Thế hệ:** {latest['generation']}")
+    st.sidebar.write(f"**Fitness tốt nhất:** {latest['best_fitness']:.1%}")
+    st.sidebar.write(f"**Fitness trung bình:** {latest['avg_fitness']:.1%}")
+    st.sidebar.write(f"**Độ đa dạng:** {latest['diversity']:.1%}")
+st.sidebar.info(f"Tổng kết quả: {len(st.session_state.history)}")
+
+# Main area
+col_main, col_input = st.columns([2, 1])
+with col_main:
+    st.subheader("📊 Lịch sử (gần đây)")
+    if st.session_state.history:
+        display = " ".join(["🟢" if x=="Tài" else "🔴" for x in st.session_state.history[-120:]])
+        st.write(display)
+        tai = st.session_state.history.count("Tài")
+        xiu = st.session_state.history.count("Xỉu")
+        st.write(f"Tổng: Tài {tai} | Xỉu {xiu} | Tỷ lệ Tài: {tai/len(st.session_state.history):.1%}")
+    else:
+        st.info("Chưa có dữ liệu. Nhấn nút để thêm kết quả.")
+
+with col_input:
+    st.subheader("🎯 Ghi kết quả")
+    if st.button("🎲 Tài", use_container_width=True):
+        add_result("Tài")
+        st.experimental_rerun()
+    if st.button("🎲 Xỉu", use_container_width=True):
+        add_result("Xỉu")
+        st.experimental_rerun()
+
+# Prediction block
+st.subheader("🤖 Dự đoán AI")
+if len(st.session_state.history) >= 10:
+    probs, tai_prob, strategy = st.session_state.evolution_ai.predict(st.session_state.history)
+    prediction = "Tài" if tai_prob > 0.5 else "Xỉu"
+    confidence = max(tai_prob, 1 - tai_prob)
+    st.session_state.ai_predictions.append({'prediction': prediction, 'confidence': confidence, 'strategy': strategy})
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Dự đoán", prediction, delta=f"{confidence:.1%}")
+    with c2:
+        st.metric("Độ tin cậy", f"{confidence:.1%}")
+    with c3:
+        names = {'pattern':'📊 Mẫu','momentum':'🚀 Động lực','cycle':'🔄 Chu kỳ','random':'🎲 Ngẫu nhiên'}
+        st.metric("Chiến lược", names.get(strategy, strategy))
+    # probability bar only (lightweight)
+    figp = go.Figure(data=[go.Bar(x=['Tài','Xỉu'], y=[probs['Tài'], probs['Xỉu']])])
+    figp.update_layout(title="Xác suất", template='plotly_dark', margin=dict(t=30))
+    st.plotly_chart(figp, use_container_width=True)
+else:
+    st.warning("Cần ít nhất 10 kết quả để AI bắt đầu dự đoán.")
+
+# Evolution visuals (kept but minimal)
+if len(st.session_state.history) >= 20 and st.session_state.evolution_ai.evolution_history:
+    st.subheader("📈 Tiến hoá & Hiệu suất")
+    metrics = st.session_state.evolution_ai.get_performance_metrics()
+    if metrics:
+        g1, g2, g3, g4 = st.columns(4)
+        with g1:
+            st.metric("Thế hệ", metrics['generation'])
+        with g2:
+            st.metric("Fitness tốt nhất", f"{metrics['best_fitness']:.1%}")
+        with g3:
+            st.metric("Độ đa dạng", f"{metrics['diversity']:.1%}")
+        with g4:
+            st.metric("Quần thể", st.session_state.evolution_ai.population_size)
+        evo_fig = plot_evolution(st.session_state.evolution_ai.evolution_history)
+        if evo_fig:
+            st.plotly_chart(evo_fig, use_container_width=True)
+
+# Training log & download
+if st.session_state.training_log:
+    st.subheader("📋 Nhật ký huấn luyện (gần đây)")
+    recent = st.session_state.training_log[-40:]
+    for e in reversed(recent):
+        icon = "✅" if e['correct'] else "❌"
+        ts = e['timestamp'].strftime("%H:%M:%S")
+        st.write(f"{icon} {ts} — Dự đoán {e['prediction']} (Tin cậy {e['confidence']:.1%}) — Thực tế {e['actual']}")
+    # download
+    try:
+        df = pd.DataFrame(st.session_state.training_log)
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button("⤓ Tải nhật ký (CSV)", data=csv, file_name="training_log.csv", mime="text/csv")
+    except Exception:
+        pass
+
+# Agent inspection (optional)
+if st.sidebar.checkbox("Hiển thị Agents (Top 8)"):
+    agents_sample = sorted(st.session_state.evolution_ai.agents, key=lambda x: x['fitness'], reverse=True)[:8]
+    df_agents = pd.DataFrame([{'fitness':a['fitness'],'age':a['age'],'spec':a['specialization']} for a in agents_sample])
+    st.sidebar.write(df_agents)
+
+# Save/Load agents
+st.sidebar.header("💾 Lưu / Tải AI")
+if st.sidebar.button("🔽 Xuất agents (.pkl)"):
+    try:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".pkl")
+        joblib.dump(st.session_state.evolution_ai.agents, tmp.name)
+        tmp.close()
+        with open(tmp.name, "rb") as f:
+            st.download_button("⤓ Tải file agents", data=f, file_name="agents.pkl")
+    except Exception as e:
+        st.sidebar.error(f"Lỗi xuất: {e}")
+
+if st.sidebar.button("🔼 Reset lịch sử"):
+    st.session_state.history = []
+    st.session_state.ai_predictions = []
+    st.session_state.training_log = []
+    st.experimental_rerun()
+
+st.sidebar.info(f"Tổng số kết quả: {len(st.session_state.history)}")
