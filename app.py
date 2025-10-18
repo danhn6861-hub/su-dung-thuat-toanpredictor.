@@ -92,7 +92,7 @@ def pattern_detector(history, window=6):
 # ===== Dự đoán từng model + tổng hợp (Cải thiện với trọng số học được) =====
 def predict_next(models, history):
     if len(history) < 10 or models is None: return None, None
-    X, _ = create_features(history)  # Lấy đặc trưng mới nhất
+    X, y = create_features(history)  # Fixed: assign y
     latest = X[-1].reshape(1, -1)  # Đặc trưng cuối cùng
     
     preds = {}
@@ -107,11 +107,30 @@ def predict_next(models, history):
     # Học trọng số từ data (sử dụng LinearRegression trên preds giả trên train)
     if len(X) > 1 and len(preds) > 1:
         # Tạo ma trận preds cho toàn train (giả lập bằng cách predict trên X)
-        pred_matrix = np.array([m.predict_proba(X)[:,1] if hasattr(m, 'predict_proba') else m.predict(X) for n,m in models.items() if n != 'Stacking']).T
-        pred_matrix = np.hstack([pred_matrix, np.full((len(X),1), preds['Pattern Detector'])])  # Thêm pattern
+        model_preds = []
+        for n, m in models.items():
+            if n != 'Stacking':
+                if hasattr(m, 'predict_proba'):
+                    model_preds.append(m.predict_proba(X)[:,1])
+                else:
+                    model_preds.append(m.predict(X))
+        pred_matrix = np.array(model_preds).T
+        
+        # Compute historical patterns correctly
+        historical_patterns = []
+        max_windows = 9  # From windows=[3,6,9]
+        for i in range(max_windows, len(history)):
+            hist_slice = history[:i]
+            historical_patterns.append(pattern_detector(hist_slice))
+        pred_matrix = np.hstack([pred_matrix, np.array(historical_patterns).reshape(-1, 1)])
+        
         split = len(X)//2
-        weight_model = LinearRegression().fit(pred_matrix[:split], y[:split])
-        final_score = weight_model.predict(np.array([[preds[n] for n in preds if n != 'Stacking'] + [preds['Pattern Detector']]]))[0]
+        if split > 0:
+            weight_model = LinearRegression().fit(pred_matrix[:split], y[:split])
+            input_vec = [preds['LogisticRegression'], preds['RandomForest'], preds['XGBoost'], preds['Pattern Detector']]
+            final_score = weight_model.predict(np.array([input_vec]))[0]
+        else:
+            final_score = preds.get('Stacking', 0.5)
     else:
         final_score = preds.get('Stacking', 0.5)
     
