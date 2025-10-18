@@ -35,6 +35,14 @@ if "strategic_memory" not in st.session_state:
         'last_weight_adjustment': 0,
         'performance_tracking': []
     }
+if "models" not in st.session_state:
+    st.session_state.models = None
+if "ai_last_pred" not in st.session_state:
+    st.session_state.ai_last_pred = None
+if "last_prediction_details" not in st.session_state:
+    st.session_state.last_prediction_details = None
+if "undo_stack" not in st.session_state:
+    st.session_state.undo_stack = []
 
 # ====== PHÂN TÍCH THỐNG KÊ THÔNG MINH ======
 def analyze_market_phase(history):
@@ -172,6 +180,9 @@ def strategic_prediction_system(models, history):
         
         # Dự đoán cơ bản
         X, _ = create_features_improved(history)
+        if len(X) == 0:
+            return None, None, "insufficient_data"
+            
         latest = X[-1:].reshape(1, -1)
         model_prob = models.predict_proba(latest)[0][1]
         pattern_prob = intelligent_pattern_detector(history, current_phase)
@@ -273,7 +284,7 @@ def update_strategic_performance(actual_result, prediction_details):
         'phase': current_phase
     })
 
-# ====== CÁC HÀM CƠ BẢN (GIỮ NGUYÊN) ======
+# ====== CÁC HÀM CƠ BẢN ======
 def create_features_improved(history, window=5):
     if len(history) < window + 1:
         return np.empty((0, window + 2)), np.empty((0,))
@@ -322,6 +333,36 @@ def train_models_improved(history_tuple, _cache_key):
         st.error(f"Lỗi huấn luyện: {str(e)}")
         return None
 
+# ====== HÀM THÊM KẾT QUẢ ======
+def add_result(result):
+    if result not in ["Tài", "Xỉu"]:
+        st.error(f"Kết quả không hợp lệ: {result}")
+        return
+    
+    # Lưu trạng thái hiện tại để undo
+    st.session_state.undo_stack.append({
+        'history': st.session_state.history.copy(),
+        'strategic_memory': st.session_state.strategic_memory.copy(),
+        'ai_last_pred': st.session_state.ai_last_pred,
+        'last_prediction_details': st.session_state.last_prediction_details
+    })
+    
+    # Thêm kết quả mới
+    st.session_state.history.append(result)
+    
+    # Cập nhật hiệu suất nếu có dự đoán trước đó
+    if st.session_state.last_prediction_details is not None:
+        update_strategic_performance(result, st.session_state.last_prediction_details)
+
+# ====== HÀM UNDO ======
+def undo_last():
+    if st.session_state.undo_stack:
+        last_state = st.session_state.undo_stack.pop()
+        st.session_state.history = last_state['history']
+        st.session_state.strategic_memory = last_state['strategic_memory']
+        st.session_state.ai_last_pred = last_state['ai_last_pred']
+        st.session_state.last_prediction_details = last_state['last_prediction_details']
+
 # ====== GIAO DIỆN CHIẾN LƯỢC ======
 st.title("🎯 AI Tài/Xỉu - Chiến Thuật Thông Minh & Ổn Định")
 
@@ -344,6 +385,16 @@ with col4:
     adjustment_games = len(st.session_state.history) - st.session_state.strategic_memory.get('last_weight_adjustment', 0)
     st.metric("⚖️ Chiến Lược", f"M:{weights['model']:.0%} P:{weights['pattern']:.0%}", delta=f"{adjustment_games}ván")
 
+# Hiển thị lịch sử gần đây
+st.subheader("📊 Lịch sử gần đây")
+if st.session_state.history:
+    # Hiển thị 20 kết quả gần nhất
+    recent_history = st.session_state.history[-20:]
+    history_text = " → ".join(recent_history)
+    st.write(history_text)
+else:
+    st.info("Chưa có dữ liệu. Hãy bắt đầu nhập kết quả!")
+
 # Biểu đồ hiệu suất
 if st.session_state.strategic_memory['performance_tracking']:
     st.subheader("📈 Biểu Đồ Hiệu Suất Chiến Thuật")
@@ -365,73 +416,82 @@ if st.session_state.strategic_memory['performance_tracking']:
 
 # Nhập liệu
 st.divider()
-col_tai, col_xiu = st.columns(2)
+st.subheader("🎮 Nhập kết quả")
+
+col_tai, col_xiu, col_undo = st.columns([1, 1, 1])
 with col_tai:
-    if st.button("🎲 Nhập Tài", key="add_tai", use_container_width=True):
-        actual = "Tài"
-        st.session_state.history.append(actual)
-        
-        # Cập nhật hiệu suất nếu có dự đoán trước
-        if hasattr(st.session_state, 'last_prediction_details'):
-            update_strategic_performance(actual, st.session_state.last_prediction_details)
-        
+    if st.button("🎲 NHẬP TÀI", key="add_tai", use_container_width=True):
+        add_result("Tài")
         st.success("Đã thêm Tài!")
         st.rerun()
         
 with col_xiu:
-    if st.button("🎲 Nhập Xỉu", key="add_xiu", use_container_width=True):
-        actual = "Xỉu"
-        st.session_state.history.append(actual)
-        
-        # Cập nhật hiệu suất nếu có dự đoán trước
-        if hasattr(st.session_state, 'last_prediction_details'):
-            update_strategic_performance(actual, st.session_state.last_prediction_details)
-        
+    if st.button("🎲 NHẬP XỈU", key="add_xiu", use_container_width=True):
+        add_result("Xỉu")
         st.success("Đã thêm Xỉu!")
+        st.rerun()
+
+with col_undo:
+    if st.button("↩️ UNDO", key="undo", use_container_width=True):
+        undo_last()
+        st.success("Đã hoàn tác!")
         st.rerun()
 
 # Huấn luyện và dự đoán
 st.divider()
-if st.button("🚀 Huấn luyện Hệ Thống", key="train_system"):
-    with st.spinner("Đang huấn luyện với chiến lược ổn định..."):
-        cache_key = str(len(st.session_state.history)) + str(st.session_state.history[-10:])
-        st.session_state.models = train_models_improved(tuple(st.session_state.history), cache_key)
-    if st.session_state.models is not None:
-        st.success("✅ Hệ thống đã sẵn sàng với chiến lược thông minh!")
+st.subheader("🤖 Huấn luyện AI")
+
+if st.button("🚀 Huấn luyện Hệ Thống", key="train_system", use_container_width=True):
+    if len(st.session_state.history) < 15:
+        st.warning("Cần ít nhất 15 ván để huấn luyện!")
+    else:
+        with st.spinner("Đang huấn luyện với chiến lược ổn định..."):
+            cache_key = str(len(st.session_state.history)) + str(st.session_state.history[-10:])
+            st.session_state.models = train_models_improved(tuple(st.session_state.history), cache_key)
+        if st.session_state.models is not None:
+            st.success("✅ Hệ thống đã sẵn sàng với chiến lược thông minh!")
 
 # Dự đoán chiến lược
-if len(st.session_state.history) >= 5 and st.session_state.models is not None:
-    pred_details, final_score, strategy = strategic_prediction_system(
-        st.session_state.models, st.session_state.history
-    )
-    
-    if pred_details:
-        st.session_state.ai_last_pred = "Tài" if final_score >= 0.5 else "Xỉu"
-        st.session_state.last_prediction_details = pred_details
+st.divider()
+st.subheader("🔮 Dự đoán")
+
+if len(st.session_state.history) >= 5:
+    if st.session_state.models is None:
+        st.info("Vui lòng huấn luyện mô hình trước khi dự đoán.")
+    else:
+        pred_details, final_score, strategy = strategic_prediction_system(
+            st.session_state.models, st.session_state.history
+        )
         
-        confidence = final_score if st.session_state.ai_last_pred == "Tài" else 1 - final_score
-        
-        st.subheader(f"🎯 Dự Đoán: **{st.session_state.ai_last_pred}** ({confidence:.1%} confidence)")
-        
-        # Hiển thị phân tích chiến lược
-        st.write("**Phân tích chiến thuật:**")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("📈 Market Phase", f"{pred_details['Market Phase']}", 
-                     delta=f"{pred_details['Phase Confidence']:.0%} confidence")
-            st.metric("🤖 Model", f"{pred_details['Model Probability']:.1%}")
-            st.metric("🔍 Pattern", f"{pred_details['Pattern Analysis']:.1%}")
-        
-        with col2:
-            weights = pred_details['Strategic Weights']
-            st.metric("⚖️ Strategic Weights", f"Model: {weights['model']:.0%}")
-            st.metric("", f"Pattern: {weights['pattern']:.0%}")
+        if pred_details:
+            st.session_state.ai_last_pred = "Tài" if final_score >= 0.5 else "Xỉu"
+            st.session_state.last_prediction_details = pred_details
             
-            if pred_details['Adjustment Recommended']:
-                st.warning(f"🔧 Đề xuất điều chỉnh: {pred_details['Adjustment Reason']}")
-            else:
-                st.info(f"✅ {pred_details['Adjustment Reason']}")
+            confidence = final_score if st.session_state.ai_last_pred == "Tài" else 1 - final_score
+            
+            st.subheader(f"🎯 Dự Đoán: **{st.session_state.ai_last_pred}** ({confidence:.1%} confidence)")
+            
+            # Hiển thị phân tích chiến lược
+            st.write("**Phân tích chiến thuật:**")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("📈 Market Phase", f"{pred_details['Market Phase']}", 
+                         delta=f"{pred_details['Phase Confidence']:.0%} confidence")
+                st.metric("🤖 Model", f"{pred_details['Model Probability']:.1%}")
+                st.metric("🔍 Pattern", f"{pred_details['Pattern Analysis']:.1%}")
+            
+            with col2:
+                weights = pred_details['Strategic Weights']
+                st.metric("⚖️ Strategic Weights", f"Model: {weights['model']:.0%}")
+                st.metric("", f"Pattern: {weights['pattern']:.0%}")
+                
+                if pred_details['Adjustment Recommended']:
+                    st.warning(f"🔧 Đề xuất điều chỉnh: {pred_details['Adjustment Reason']}")
+                else:
+                    st.info(f"✅ {pred_details['Adjustment Reason']}")
+else:
+    st.info("Cần ít nhất 5 ván để bắt đầu dự đoán.")
 
 # Panel chiến lược
 st.sidebar.markdown("""
@@ -462,3 +522,23 @@ if st.sidebar.checkbox("📋 Lịch sử Chiến thuật"):
     
     if 'last_adjustment_reason' in st.session_state.strategic_memory:
         st.sidebar.write(f"**Lần điều chỉnh gần nhất:** {st.session_state.strategic_memory['last_adjustment_reason']}")
+
+# Xóa lịch sử
+if st.sidebar.checkbox("🗑️ Xóa toàn bộ lịch sử"):
+    if st.sidebar.button("XÁC NHẬN XÓA", type="primary"):
+        st.session_state.history = []
+        st.session_state.strategic_memory = {
+            'model_performance': {'wins': 0, 'total': 0, 'confidence': 0.5},
+            'pattern_performance': {'wins': 0, 'total': 0, 'confidence': 0.5},
+            'current_phase': 'balanced',
+            'phase_duration': 0,
+            'strategic_weights': {'model': 0.6, 'pattern': 0.4},
+            'last_weight_adjustment': 0,
+            'performance_tracking': []
+        }
+        st.session_state.models = None
+        st.session_state.ai_last_pred = None
+        st.session_state.last_prediction_details = None
+        st.session_state.undo_stack = []
+        st.sidebar.success("Đã xóa toàn bộ lịch sử!")
+        st.rerun()
