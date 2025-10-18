@@ -1,269 +1,464 @@
-# app.py — Fusion Pro (Hybrid + Improved v2) — Streamlit Cloud Ready
 import streamlit as st
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import io, os, joblib
-from datetime import datetime
-from sklearn.linear_model import LogisticRegressionCV, LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, VotingClassifier, StackingClassifier
-from sklearn.calibration import CalibratedClassifierCV
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import accuracy_score, brier_score_loss
+from sklearn.metrics import accuracy_score
+import matplotlib.pyplot as plt
+import io
+import base64
+from datetime import datetime
+import random
 
-# XGBoost optional
-try:
-    from xgboost import XGBClassifier
-    HAS_XGB = True
-except Exception:
-    HAS_XGB = False
+st.set_page_config(page_title="AI Tài/Xỉu - Chiến Thuật Thông Minh", layout="wide")
 
-# ----------------- Config -----------------
-st.set_page_config(page_title="Fusion Pro - AI Tài/Xỉu", layout="wide")
-st.title("🔮 Fusion Pro — AI Dự đoán Tài/Xỉu (Hybrid + Improved)")
-st.caption("⚠️ Ứng dụng phục vụ học tập và nghiên cứu thuật toán AI, không khuyến khích cờ bạc.")
+# ====== TRIẾT LÝ CHIẾN THUẬT ======
+"""
+TRIẾT LÝ CHIẾN THUẬT THÔNG MINH:
+1. KHÔNG điều chỉnh trọng số dựa trên vài ván thắng/thua ngắn hạn
+2. CHỈ thay đổi chiến lược khi có bằng chứng THỐNG KÊ đủ mạnh
+3. ƯU TIÊN sự ỔN ĐỊNH thay vì tối ưu hóa liên tục
+4. PHÂN BIỆT rõ may mắn ngắn hạn vs kỹ năng thực sự
+"""
 
-RANDOM_SEED = 42
-np.random.seed(RANDOM_SEED)
-MODEL_PATH = "/tmp/fusion_pro_model.joblib"
-HISTORY_PATH = "/tmp/fusion_pro_history.csv"
+# ====== KHỞI TẠO TRẠNG THÁI THÔNG MINH ======
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "strategic_memory" not in st.session_state:
+    st.session_state.strategic_memory = {
+        'model_performance': {'wins': 0, 'total': 0, 'confidence': 0.5},
+        'pattern_performance': {'wins': 0, 'total': 0, 'confidence': 0.5},
+        'current_phase': 'balanced',  # balanced, tai_streak, xiu_streak, volatile
+        'phase_duration': 0,
+        'strategic_weights': {'model': 0.6, 'pattern': 0.4},
+        'last_weight_adjustment': 0,
+        'performance_tracking': []
+    }
 
-# ----------------- Init Session -----------------
-for key, default in {
-    "history": [], "ai_conf": [], "models": None,
-    "ai_last_pred": None, "undo_stack": []
-}.items():
-    if key not in st.session_state:
-        st.session_state[key] = default
+# ====== PHÂN TÍCH THỐNG KÊ THÔNG MINH ======
+def analyze_market_phase(history):
+    """Phân tích phase thị trường với độ tin cậy thống kê"""
+    if len(history) < 20:
+        return 'balanced', 0.5
+    
+    # Phân tích xu hướng ngắn hạn (5 ván)
+    short_term = history[-5:] if len(history) >= 5 else history
+    tai_short = sum(1 for x in short_term if x == "Tài") / len(short_term)
+    
+    # Phân tích xu hướng trung hạn (15 ván)
+    med_term = history[-15:] if len(history) >= 15 else history
+    tai_med = sum(1 for x in med_term if x == "Tài") / len(med_term)
+    
+    # Phân tích biến động
+    changes = sum(1 for i in range(1, len(short_term)) if short_term[i] != short_term[i-1])
+    volatility = changes / (len(short_term) - 1) if len(short_term) > 1 else 0.5
+    
+    # Xác định phase với ngưỡng thống kê
+    if abs(tai_med - 0.5) < 0.2 and volatility > 0.6:
+        return 'volatile', volatility
+    elif tai_med > 0.7:
+        return 'tai_streak', tai_med
+    elif tai_med < 0.3:
+        return 'xiu_streak', 1 - tai_med
+    else:
+        return 'balanced', 0.5
 
-# ----------------- Utilities -----------------
-def save_state_model(models, path=MODEL_PATH):
+def should_adjust_weights(strategic_memory, current_phase, phase_confidence):
+    """Quyết định THÔNG MINH có nên điều chỉnh trọng số không"""
+    memory = strategic_memory
+    
+    # LUẬT 1: Không điều chỉnh quá thường xuyên
+    games_since_last_adjust = len(st.session_state.history) - memory['last_weight_adjustment']
+    if games_since_last_adjust < 10:  # Tối thiểu 10 ván giữa các lần điều chỉnh
+        return False, "Điều chỉnh quá gần nhau"
+    
+    # LUẬT 2: Cần đủ dữ liệu thống kê
+    min_games_for_adjustment = 30
+    if len(st.session_state.history) < min_games_for_adjustment:
+        return False, f"Cần ít nhất {min_games_for_adjustment} ván"
+    
+    # LUẬT 3: Chênh lệch hiệu suất phải đủ lớn và có ý nghĩa thống kê
+    model_perf = memory['model_performance']
+    pattern_perf = memory['pattern_performance']
+    
+    if model_perf['total'] < 20 or pattern_perf['total'] < 20:
+        return False, "Chưa đủ dữ liệu đánh giá hiệu suất"
+    
+    model_win_rate = model_perf['wins'] / model_perf['total']
+    pattern_win_rate = pattern_perf['wins'] / pattern_perf['total']
+    performance_gap = abs(model_win_rate - pattern_win_rate)
+    
+    # Ngưỡng chênh lệch hiệu suất để điều chỉnh (15%)
+    if performance_gap < 0.15:
+        return False, f"Chênh lệch hiệu suất {performance_gap:.1%} quá nhỏ"
+    
+    # LUẬT 4: Phase thị trường ảnh hưởng đến quyết định
+    if current_phase == 'volatile' and phase_confidence > 0.7:
+        # Trong phase biến động, ưu tiên pattern detection
+        return True, "Phase biến động - Ưu tiên pattern"
+    elif current_phase in ['tai_streak', 'xiu_streak'] and phase_confidence > 0.7:
+        # Trong phase trend rõ, ưu tiên model
+        return True, "Phase trend rõ - Ưu tiên model"
+    elif performance_gap > 0.2:  # Chênh lệch rất lớn
+        return True, f"Chênh lệch hiệu suất lớn: {performance_gap:.1%}"
+    
+    return False, "Không đủ điều kiện điều chỉnh"
+
+def calculate_strategic_weights(strategic_memory, current_phase):
+    """Tính toán trọng số CHIẾN LƯỢC thay vì tự động"""
+    memory = strategic_memory
+    model_perf = memory['model_performance']
+    pattern_perf = memory['pattern_performance']
+    
+    # Tính win rate với độ tin cậy
+    model_win_rate = model_perf['wins'] / model_perf['total'] if model_perf['total'] > 0 else 0.5
+    pattern_win_rate = pattern_perf['wins'] / pattern_perf['total'] if pattern_perf['total'] > 0 else 0.5
+    
+    # Base weights dựa trên hiệu suất
+    total_performance = model_win_rate + pattern_win_rate
+    if total_performance > 0:
+        base_model_weight = model_win_rate / total_performance
+        base_pattern_weight = pattern_win_rate / total_performance
+    else:
+        base_model_weight, base_pattern_weight = 0.6, 0.4
+    
+    # Điều chỉnh theo phase thị trường
+    if current_phase == 'volatile':
+        # Phase biến động: pattern detection quan trọng hơn
+        final_model_weight = base_model_weight * 0.7
+        final_pattern_weight = base_pattern_weight * 1.3
+    elif current_phase in ['tai_streak', 'xiu_streak']:
+        # Phase trend: model quan trọng hơn
+        final_model_weight = base_model_weight * 1.3
+        final_pattern_weight = base_pattern_weight * 0.7
+    else:
+        # Phase cân bằng
+        final_model_weight = base_model_weight
+        final_pattern_weight = base_pattern_weight
+    
+    # Chuẩn hóa và đảm bảo trọng số hợp lý
+    total = final_model_weight + final_pattern_weight
+    model_weight = max(0.3, min(0.8, final_model_weight / total))
+    pattern_weight = max(0.2, min(0.7, final_pattern_weight / total))
+    
+    # Chuẩn hóa lần cuối
+    total = model_weight + pattern_weight
+    return {
+        'model': model_weight / total,
+        'pattern': pattern_weight / total
+    }
+
+# ====== HỆ THỐNG DỰ ĐOÁN CHIẾN LƯỢC ======
+def strategic_prediction_system(models, history):
+    """Hệ thống dự đoán với tư duy chiến thuật"""
+    if len(history) < 5 or models is None:
+        return None, None, "insufficient_data"
+    
     try:
-        joblib.dump(models, path)
-        return True
-    except Exception:
-        return False
+        # Phân tích phase thị trường hiện tại
+        current_phase, phase_confidence = analyze_market_phase(history)
+        
+        # Quyết định chiến lược
+        should_adjust, reason = should_adjust_weights(
+            st.session_state.strategic_memory, current_phase, phase_confidence
+        )
+        
+        if should_adjust:
+            new_weights = calculate_strategic_weights(st.session_state.strategic_memory, current_phase)
+            st.session_state.strategic_memory['strategic_weights'] = new_weights
+            st.session_state.strategic_memory['last_weight_adjustment'] = len(history)
+            st.session_state.strategic_memory['last_adjustment_reason'] = reason
+        
+        # Dự đoán cơ bản
+        X, _ = create_features_improved(history)
+        latest = X[-1:].reshape(1, -1)
+        model_prob = models.predict_proba(latest)[0][1]
+        pattern_prob = intelligent_pattern_detector(history, current_phase)
+        
+        # Áp dụng trọng số chiến lược
+        weights = st.session_state.strategic_memory['strategic_weights']
+        final_score = (weights['model'] * model_prob + 
+                      weights['pattern'] * pattern_prob)
+        
+        prediction_details = {
+            "Model Probability": model_prob,
+            "Pattern Analysis": pattern_prob,
+            "Market Phase": current_phase,
+            "Phase Confidence": phase_confidence,
+            "Strategic Weights": weights.copy(),
+            "Adjustment Recommended": should_adjust,
+            "Adjustment Reason": reason if should_adjust else "Giữ nguyên chiến lược"
+        }
+        
+        return prediction_details, final_score, "strategic"
+        
+    except Exception as e:
+        st.error(f"Lỗi hệ thống chiến thuật: {str(e)}")
+        return None, None, "error"
 
-def load_state_model(path=MODEL_PATH):
-    if os.path.exists(path):
-        try:
-            return joblib.load(path)
-        except Exception:
-            return None
-    return None
-
-def export_history_csv_bytes():
-    df = pd.DataFrame({"Kết quả": st.session_state.history})
-    return df.to_csv(index=False).encode("utf-8")
-
-# ----------------- Feature creation -----------------
-def create_features(history, window=6):
-    if len(history) <= window:
-        return np.empty((0, window + 2)), np.empty((0,))
-    X, y = [], []
-    for i in range(window, len(history)):
-        base = [1 if h == "Tài" else 0 for h in history[i-window:i]]
-        tai_ratio = sum(base)/window
-        change_ratio = sum(base[j]!=base[j-1] for j in range(1,len(base))) / max(1,window-1)
-        streak = 1
-        for j in range(len(base)-2, -1, -1):
-            if base[j] == base[-1]:
-                streak += 1
+def intelligent_pattern_detector(history, market_phase):
+    """Phát hiện pattern thông minh theo phase thị trường"""
+    if len(history) < 5:
+        return 0.5
+    
+    # Phân tích cơ bản
+    short_term = history[-5:] if len(history) >= 5 else history
+    med_term = history[-10:] if len(history) >= 10 else history
+    
+    tai_short = sum(1 for x in short_term if x == "Tài") / len(short_term)
+    tai_med = sum(1 for x in med_term if x == "Tài") / len(med_term)
+    
+    # Điều chỉnh logic theo phase
+    if market_phase == 'volatile':
+        # Phase biến động: mean reversion mạnh
+        if tai_short > 0.7:
+            return 0.3  # Thiên về Xỉu sau nhiều Tài
+        elif tai_short < 0.3:
+            return 0.7  # Thiên về Tài sau nhiều Xỉu
+        else:
+            return 0.5
+            
+    elif market_phase in ['tai_streak', 'xiu_streak']:
+        # Phase trend: follow trend
+        return tai_med  # Theo xu hướng trung hạn
+        
+    else:
+        # Phase cân bằng: kết hợp
+        streak_length = 1
+        for i in range(2, min(6, len(history)) + 1):
+            if history[-i] == history[-1]:
+                streak_length += 1
             else:
                 break
-        X.append(base + [tai_ratio, change_ratio, streak])
-        y.append(1 if history[i]=="Tài" else 0)
-    return np.array(X,float), np.array(y,int)
-
-# ----------------- Pattern detector -----------------
-def pattern_detector(history, lookback=8):
-    if len(history)<3: return 0.5
-    recent = history[-lookback:]
-    base = [1 if x=="Tài" else 0 for x in recent]
-    base_prob = sum(base)/len(base)
-    # detect streak
-    streak, cur = 1,1
-    for i in range(1,len(base)):
-        if base[i]==base[i-1]:
-            cur+=1; streak=max(streak,cur)
-        else: cur=1
-    if streak>=4: return 1-base_prob
-    return 0.5
-
-# ----------------- Train model -----------------
-@st.cache_resource
-def train_fusion(history_tuple, ai_conf_tuple, use_xgb=True):
-    history, ai_conf = list(history_tuple), list(ai_conf_tuple)
-    if len(history)<12: return None
-    X,y = create_features(history)
-    if X.shape[0]<8 or len(np.unique(y))<2: return None
-
-    weights = np.linspace(0.5,1.2,len(y))
-    if ai_conf and len(ai_conf)>=len(y):
-        weights *= np.array(ai_conf[-len(y):])
-    weights = np.clip(weights,0.3,2.0)
-
-    tscv = TimeSeriesSplit(n_splits=min(4,max(2,len(y)//8)))
-    lr = LogisticRegressionCV(cv=tscv,max_iter=1000,class_weight='balanced',random_state=RANDOM_SEED)
-    rf = RandomForestClassifier(n_estimators=80,max_depth=6,class_weight='balanced',random_state=RANDOM_SEED)
-    learners=[('lr',lr),('rf',rf)]
-
-    xgb=None
-    if use_xgb and HAS_XGB:
-        try:
-            xgb = XGBClassifier(use_label_encoder=False, eval_metric='logloss',
-                                n_estimators=80,random_state=RANDOM_SEED)
-            learners.append(('xgb',xgb))
-        except: pass
-
-    for _,m in learners:
-        try: m.fit(X,y,sample_weight=weights)
-        except: m.fit(X,y)
-
-    try:
-        calibrated_rf = CalibratedClassifierCV(base_estimator=rf, cv='prefit').fit(X,y)
-    except: calibrated_rf = rf
-
-    estimators_voting=[('lr',lr),('rf',calibrated_rf)]
-    if xgb: estimators_voting.append(('xgb',xgb))
-    voting = VotingClassifier(estimators_voting,voting='soft')
-    voting.fit(X,y)
-
-    try:
-        stack=StackingClassifier(estimators=learners,final_estimator=LogisticRegression(max_iter=600))
-        stack.fit(X,y)
-    except: stack=voting
-
-    metrics={}
-    if len(X)>20:
-        split=int(0.8*len(X))
-        X_te,y_te=X[split:],y[split:]
-        p=voting.predict(X_te)
-        metrics["voting_acc"]=float(accuracy_score(y_te,p))
-        metrics["voting_brier"]=float(brier_score_loss(y_te,voting.predict_proba(X_te)[:,1]))
-    return {"voting":voting,"stacking":stack,"metrics":metrics}
-
-# ----------------- Prediction -----------------
-def predict_fusion(models, history, adjust_strength=0.45, recent_n=20):
-    if models is None or len(history)<6: return None,None
-    X,_=create_features(history)
-    if len(X)==0: return None,None
-    latest=X[-1:]
-    try: p1=models['voting'].predict_proba(latest)[0][1]
-    except: p1=0.5
-    try: p2=models['stacking'].predict_proba(latest)[0][1]
-    except: p2=p1
-    model_prob=np.mean([p1,p2])
-    pattern_prob=pattern_detector(history)
-    n=min(len(history),recent_n)
-    ratio=sum(1 for x in history[-n:] if x=="Tài")/n
-    final=(1-adjust_strength)*model_prob + adjust_strength*(0.5*pattern_prob+0.5*ratio)
-    return {"VotingProb":p1,"StackingProb":p2,"PatternProb":pattern_prob,"RecentRatio":ratio},float(np.clip(final,0.01,0.99))
-
-# ----------------- History management -----------------
-def add_result(res):
-    if res not in ["Tài","Xỉu"]: return
-    st.session_state.undo_stack.append(st.session_state.history.copy())
-    st.session_state.history.append(res)
-    if st.session_state.ai_last_pred:
-        st.session_state.ai_conf.append(1.1 if st.session_state.ai_last_pred==res else 0.9)
-    if len(st.session_state.history)>1000:
-        st.session_state.history=st.session_state.history[-1000:]
-        st.session_state.ai_conf=st.session_state.ai_conf[-1000:]
-
-def undo():
-    if st.session_state.undo_stack:
-        st.session_state.history=st.session_state.undo_stack.pop()
-
-# ----------------- Plots -----------------
-def plot_history_bar(history):
-    if not history: return None
-    df=pd.Series(history).value_counts(normalize=True)*100
-    fig,ax=plt.subplots(); ax.bar(df.index,df.values)
-    ax.set_ylim(0,100); ax.set_ylabel("Tỷ lệ (%)"); ax.set_title("Tỷ lệ Tài/Xỉu")
-    buf=io.BytesIO(); fig.tight_layout(); fig.savefig(buf,format="png"); buf.seek(0); plt.close(fig)
-    return buf
-
-# ----------------- Load saved -----------------
-loaded=load_state_model(MODEL_PATH)
-if loaded and not st.session_state.models: st.session_state.models=loaded
-
-if os.path.exists(HISTORY_PATH) and not st.session_state.history:
-    try:
-        df=pd.read_csv(HISTORY_PATH)
-        if "Kết quả" in df.columns:
-            st.session_state.history=df["Kết quả"].tolist()
-            st.session_state.ai_conf=[1.0]*len(st.session_state.history)
-    except: pass
-
-# ----------------- UI -----------------
-sidebar=st.sidebar
-with sidebar:
-    adj_strength=st.slider("⚖️ Pattern vs Model",0.0,1.0,0.45,0.05)
-    recent_n=st.number_input("🔢 Recent window",5,100,20,5)
-    use_xgb=st.checkbox("Allow XGBoost",False)
-    save_model=st.checkbox("💾 Save model",True)
-
-# Top: history
-st.subheader("📜 Lịch sử gần nhất")
-if st.session_state.history:
-    st.write(" → ".join(st.session_state.history[-40:]))
-else:
-    st.info("Chưa có dữ liệu.")
-
-cols=st.columns(3)
-if cols[0].button("➕ Thêm Tài"): add_result("Tài"); st.rerun()
-if cols[1].button("➖ Thêm Xỉu"): add_result("Xỉu"); st.rerun()
-if cols[2].button("↩️ Undo"): undo(); st.rerun()
-
-st.markdown("---")
-left,right=st.columns([2,1])
-
-with left:
-    st.subheader("📊 Thống kê & Biểu đồ")
-    buf=plot_history_bar(st.session_state.history)
-    if buf: st.image(buf,use_column_width=True)
-    if st.session_state.history:
-        n=min(len(st.session_state.history),recent_n)
-        r=sum(1 for x in st.session_state.history[-n:] if x=="Tài")/n
-        st.write(f"Tỷ lệ Tài trong {n} ván gần nhất: **{r:.1%}**")
-
-with right:
-    st.subheader("⚙️ Huấn luyện & Dự đoán")
-    if st.button("🚀 Huấn luyện (Train)"):
-        with st.spinner("Đang huấn luyện model..."):
-            models=train_fusion(tuple(st.session_state.history),tuple(st.session_state.ai_conf),use_xgb)
-            if models is None:
-                st.error("Không đủ dữ liệu để huấn luyện.")
-            else:
-                st.session_state.models=models
-                if save_model: save_state_model(models)
-                st.success("Huấn luyện hoàn tất ✅")
-                if "metrics" in models:
-                    st.json(models["metrics"])
-                # 🔹 auto predict ngay sau huấn luyện
-                preds,final=predict_fusion(models,st.session_state.history,adj_strength,recent_n)
-                if preds:
-                    label="Tài" if final>=0.5 else "Xỉu"
-                    st.metric("🎯 Dự đoán sau huấn luyện",f"{label} ({final*100:.2f}%)")
-
-    st.markdown("---")
-    if st.button("🤖 Dự đoán (Predict)"):
-        if not st.session_state.models:
-            st.warning("Vui lòng huấn luyện model trước.")
+                
+        if streak_length >= 3:
+            # Chuỗi dài -> mean reversion
+            return 0.4 if history[-1] == "Tài" else 0.6
         else:
-            preds,final=predict_fusion(st.session_state.models,st.session_state.history,adj_strength,recent_n)
-            if preds:
-                label="Tài" if final>=0.5 else "Xỉu"
-                st.metric("🎯 Dự đoán",f"{label} ({final*100:.2f}%)")
-                st.write(preds)
-                st.session_state.ai_last_pred=label
+            return (tai_short * 0.6 + tai_med * 0.4)
 
-    st.markdown("---")
-    if st.button("💾 Lưu lịch sử"):
-        with open(HISTORY_PATH,"wb") as f: f.write(export_history_csv_bytes())
-        st.success("Đã lưu lịch sử.")
-    st.download_button("📥 Tải CSV",export_history_csv_bytes(),"history.csv","text/csv")
+# ====== CẬP NHẬT HIỆU SUẤT THÔNG MINH ======
+def update_strategic_performance(actual_result, prediction_details):
+    """Cập nhật hiệu suất với sự thận trọng"""
+    memory = st.session_state.strategic_memory
+    predicted_tai = prediction_details['Model Probability'] > 0.5
+    pattern_tai = prediction_details['Pattern Analysis'] > 0.5
+    
+    actual_tai = (actual_result == "Tài")
+    
+    # Cập nhật hiệu suất model
+    memory['model_performance']['total'] += 1
+    if predicted_tai == actual_tai:
+        memory['model_performance']['wins'] += 1
+    
+    # Cập nhật hiệu suất pattern
+    memory['pattern_performance']['total'] += 1
+    if pattern_tai == actual_tai:
+        memory['pattern_performance']['wins'] += 1
+    
+    # Cập nhật phase tracking
+    current_phase, _ = analyze_market_phase(st.session_state.history)
+    if current_phase == memory['current_phase']:
+        memory['phase_duration'] += 1
+    else:
+        memory['current_phase'] = current_phase
+        memory['phase_duration'] = 1
+    
+    # Lưu tracking hiệu suất
+    memory['performance_tracking'].append({
+        'game': len(st.session_state.history),
+        'model_win_rate': memory['model_performance']['wins'] / memory['model_performance']['total'],
+        'pattern_win_rate': memory['pattern_performance']['wins'] / memory['pattern_performance']['total'],
+        'phase': current_phase
+    })
 
-st.markdown("---")
-st.caption("© 2025 Fusion Pro — Hybrid + Improved v2 (Streamlit Cloud Optimized)")
+# ====== CÁC HÀM CƠ BẢN (GIỮ NGUYÊN) ======
+def create_features_improved(history, window=5):
+    if len(history) < window + 1:
+        return np.empty((0, window + 2)), np.empty((0,))
+    
+    X = []
+    y = []
+    
+    for i in range(window, len(history)):
+        base_features = [1 if x == "Tài" else 0 for x in history[i - window:i]]
+        tai_count = sum(base_features)
+        tai_ratio = tai_count / window
+        
+        changes = 0
+        for j in range(1, len(base_features)):
+            if base_features[j] != base_features[j-1]:
+                changes += 1
+        change_ratio = changes / (window - 1) if window > 1 else 0
+        
+        combined_features = base_features + [tai_ratio, change_ratio]
+        X.append(combined_features)
+        y.append(1 if history[i] == "Tài" else 0)
+    
+    return np.array(X), np.array(y)
+
+@st.cache_resource
+def train_models_improved(history_tuple, _cache_key):
+    history = list(history_tuple)
+    X, y = create_features_improved(history)
+    
+    if len(X) < 15:
+        st.warning("Cần ít nhất 15 ván để huấn luyện mô hình ổn định.")
+        return None
+
+    try:
+        tscv = TimeSeriesSplit(n_splits=min(4, len(X)//5))
+        
+        lr = LogisticRegression(C=0.5, random_state=42, max_iter=1000)
+        rf = RandomForestClassifier(n_estimators=50, max_depth=6, random_state=42)
+        
+        voting = VotingClassifier(estimators=[('lr', lr), ('rf', rf)], voting='soft')
+        voting.fit(X, y)
+        
+        return voting
+
+    except Exception as e:
+        st.error(f"Lỗi huấn luyện: {str(e)}")
+        return None
+
+# ====== GIAO DIỆN CHIẾN LƯỢC ======
+st.title("🎯 AI Tài/Xỉu - Chiến Thuật Thông Minh & Ổn Định")
+
+# Hiển thị trạng thái chiến lược
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    phase = st.session_state.strategic_memory['current_phase']
+    phase_duration = st.session_state.strategic_memory['phase_duration']
+    st.metric("📊 Phase Thị Trường", phase, delta=f"{phase_duration} ván")
+with col2:
+    model_perf = st.session_state.strategic_memory['model_performance']
+    model_win_rate = model_perf['wins'] / model_perf['total'] if model_perf['total'] > 0 else 0
+    st.metric("🤖 Model Win Rate", f"{model_win_rate:.1%}")
+with col3:
+    pattern_perf = st.session_state.strategic_memory['pattern_performance']
+    pattern_win_rate = pattern_perf['wins'] / pattern_perf['total'] if pattern_perf['total'] > 0 else 0
+    st.metric("🔍 Pattern Win Rate", f"{pattern_win_rate:.1%}")
+with col4:
+    weights = st.session_state.strategic_memory['strategic_weights']
+    adjustment_games = len(st.session_state.history) - st.session_state.strategic_memory.get('last_weight_adjustment', 0)
+    st.metric("⚖️ Chiến Lược", f"M:{weights['model']:.0%} P:{weights['pattern']:.0%}", delta=f"{adjustment_games}ván")
+
+# Biểu đồ hiệu suất
+if st.session_state.strategic_memory['performance_tracking']:
+    st.subheader("📈 Biểu Đồ Hiệu Suất Chiến Thuật")
+    tracking = st.session_state.strategic_memory['performance_tracking']
+    
+    games = [x['game'] for x in tracking]
+    model_rates = [x['model_win_rate'] for x in tracking]
+    pattern_rates = [x['pattern_win_rate'] for x in tracking]
+    
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(games, model_rates, label='Model Win Rate', linewidth=2)
+    ax.plot(games, pattern_rates, label='Pattern Win Rate', linewidth=2)
+    ax.axhline(y=0.5, color='red', linestyle='--', alpha=0.5, label='Ngưỡng 50%')
+    ax.set_ylabel("Tỷ lệ thắng")
+    ax.set_xlabel("Số ván")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    st.pyplot(fig)
+
+# Nhập liệu
+st.divider()
+col_tai, col_xiu = st.columns(2)
+with col_tai:
+    if st.button("🎲 Nhập Tài", key="add_tai", use_container_width=True):
+        actual = "Tài"
+        st.session_state.history.append(actual)
+        
+        # Cập nhật hiệu suất nếu có dự đoán trước
+        if hasattr(st.session_state, 'last_prediction_details'):
+            update_strategic_performance(actual, st.session_state.last_prediction_details)
+        
+        st.success("Đã thêm Tài!")
+        st.rerun()
+        
+with col_xiu:
+    if st.button("🎲 Nhập Xỉu", key="add_xiu", use_container_width=True):
+        actual = "Xỉu"
+        st.session_state.history.append(actual)
+        
+        # Cập nhật hiệu suất nếu có dự đoán trước
+        if hasattr(st.session_state, 'last_prediction_details'):
+            update_strategic_performance(actual, st.session_state.last_prediction_details)
+        
+        st.success("Đã thêm Xỉu!")
+        st.rerun()
+
+# Huấn luyện và dự đoán
+st.divider()
+if st.button("🚀 Huấn luyện Hệ Thống", key="train_system"):
+    with st.spinner("Đang huấn luyện với chiến lược ổn định..."):
+        cache_key = str(len(st.session_state.history)) + str(st.session_state.history[-10:])
+        st.session_state.models = train_models_improved(tuple(st.session_state.history), cache_key)
+    if st.session_state.models is not None:
+        st.success("✅ Hệ thống đã sẵn sàng với chiến lược thông minh!")
+
+# Dự đoán chiến lược
+if len(st.session_state.history) >= 5 and st.session_state.models is not None:
+    pred_details, final_score, strategy = strategic_prediction_system(
+        st.session_state.models, st.session_state.history
+    )
+    
+    if pred_details:
+        st.session_state.ai_last_pred = "Tài" if final_score >= 0.5 else "Xỉu"
+        st.session_state.last_prediction_details = pred_details
+        
+        confidence = final_score if st.session_state.ai_last_pred == "Tài" else 1 - final_score
+        
+        st.subheader(f"🎯 Dự Đoán: **{st.session_state.ai_last_pred}** ({confidence:.1%} confidence)")
+        
+        # Hiển thị phân tích chiến lược
+        st.write("**Phân tích chiến thuật:**")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("📈 Market Phase", f"{pred_details['Market Phase']}", 
+                     delta=f"{pred_details['Phase Confidence']:.0%} confidence")
+            st.metric("🤖 Model", f"{pred_details['Model Probability']:.1%}")
+            st.metric("🔍 Pattern", f"{pred_details['Pattern Analysis']:.1%}")
+        
+        with col2:
+            weights = pred_details['Strategic Weights']
+            st.metric("⚖️ Strategic Weights", f"Model: {weights['model']:.0%}")
+            st.metric("", f"Pattern: {weights['pattern']:.0%}")
+            
+            if pred_details['Adjustment Recommended']:
+                st.warning(f"🔧 Đề xuất điều chỉnh: {pred_details['Adjustment Reason']}")
+            else:
+                st.info(f"✅ {pred_details['Adjustment Reason']}")
+
+# Panel chiến lược
+st.sidebar.markdown("""
+### 🧠 Triết Lý Chiến Thuật
+
+**NGUYÊN TẮC VÀNG:**
+- ✅ **Ổn định > Tối ưu hóa liên tục**
+- ✅ **Thống kê > Cảm tính**
+- ✅ **Kiên nhẫn > Vội vàng**
+
+**LUẬT ĐIỀU CHỈNH:**
+1. Tối thiểu 10 ván giữa các lần điều chỉnh
+2. Cần ít nhất 30 ván để đánh giá hiệu suất  
+3. Chênh lệch hiệu suất phải >15%
+4. Phase thị trường phải rõ ràng (>70% confidence)
+
+**CHIẾN LƯỢC THEO PHASE:**
+- 📊 **Balanced**: Kết hợp cân bằng
+- 📈 **Trend**: Ưu tiên model
+- 📉 **Volatile**: Ưu tiên pattern
+""")
+
+# Hiển thị lịch sử điều chỉnh
+if st.sidebar.checkbox("📋 Lịch sử Chiến thuật"):
+    st.sidebar.write("**Hiệu suất hiện tại:**")
+    st.sidebar.write(f"- Model: {st.session_state.strategic_memory['model_performance']['wins']}/{st.session_state.strategic_memory['model_performance']['total']}")
+    st.sidebar.write(f"- Pattern: {st.session_state.strategic_memory['pattern_performance']['wins']}/{st.session_state.strategic_memory['pattern_performance']['total']}")
+    
+    if 'last_adjustment_reason' in st.session_state.strategic_memory:
+        st.sidebar.write(f"**Lần điều chỉnh gần nhất:** {st.session_state.strategic_memory['last_adjustment_reason']}")
