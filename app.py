@@ -1,319 +1,183 @@
-# =========================================================
-# file: app.py
-# AI Tài/Xỉu — Fusion Turbo v2.4 (2025)
-# Full version: causal + adaptive + anti-overfit + elite diversification
-# =========================================================
-
 import streamlit as st
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier, StackingClassifier
+from xgboost import XGBClassifier
+from sklearn.model_selection import TimeSeriesSplit
+import matplotlib.pyplot as plt
+import io
+import base64
 from datetime import datetime
-import random
-from collections import deque
-import plotly.graph_objects as go
 
-st.set_page_config(page_title="AI Tài/Xỉu - Fusion Turbo v2.4", layout="wide")
+st.set_page_config(page_title="AI Dự đoán Tài/Xỉu Nâng Cao", layout="wide")
 
+# Sidebar
 st.sidebar.markdown("""
-### ⚠️ LƯU Ý
-Ứng dụng mang tính giải trí. Không dùng để đánh bạc thật.
-Phiên bản: **Fusion Turbo v2.4** — adaptive causal learning.
+### ⚠️ Lưu Ý
+Ứng dụng này chỉ mang tính chất giải trí và tham khảo. Không khuyến khích sử dụng cho mục đích cờ bạc hoặc đầu tư thực tế.
 """)
 
-# ================= Evolutionary AI =================
-class EvolutionaryTaiXiuAI:
-    def __init__(self, population_size=200, memory_size=1000, seed=42):
-        self.population_size = int(population_size)
-        self.memory_size = memory_size
-        self.generation = 0
-        self.best_fitness = 0.0
-        self.seed = seed
-        np.random.seed(seed)
-        random.seed(seed)
+# ====== Session state ======
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "ai_confidence" not in st.session_state:
+    st.session_state.ai_confidence = []
+if "models" not in st.session_state:
+    st.session_state.models = None
+if "ai_last_pred" not in st.session_state:
+    st.session_state.ai_last_pred = None
+if "undo_stack" not in st.session_state:
+    st.session_state.undo_stack = []
 
-        self.agents = [self._create_agent() for _ in range(self.population_size)]
-        self._stacked_cache = None
-        self.evolution_history = []
-        self.memory = deque(maxlen=memory_size)
+# ====== Hàm tạo đặc trưng ======
+def create_features(history, window=6):
+    if len(history) < window + 1:
+        return np.empty((0, window)), np.empty((0,))
+    X, y = [], []
+    for i in range(window, len(history)):
+        X.append([1 if x == "Tài" else 0 for x in history[i-window:i]])
+        y.append(1 if history[i] == "Tài" else 0)
+    return np.array(X), np.array(y)
 
-    def _create_agent(self):
-        return {
-            'weights_input': np.random.uniform(-1, 1, (20, 32)).astype(np.float32),
-            'weights_hidden': np.random.uniform(-1, 1, (32, 16)).astype(np.float32),
-            'weights_output': np.random.uniform(-1, 1, (16, 1)).astype(np.float32),
-            'bias_input': np.random.uniform(-0.5, 0.5, 32).astype(np.float32),
-            'bias_hidden': np.random.uniform(-0.5, 0.5, 16).astype(np.float32),
-            'bias_output': np.random.uniform(-0.1, 0.1, 1).astype(np.float32),
-            'fitness': 0.0,
-            'age': 0,
-            'specialization': random.choice(['pattern','momentum','cycle','random'])
+# ====== Huấn luyện riêng từng model ======
+@st.cache_resource
+def train_models_individual(history):
+    X, y = create_features(history)
+    if len(X) < 6:
+        return None
+
+    try:
+        models = {
+            'LogisticRegression': LogisticRegression(),
+            'RandomForest': RandomForestClassifier(n_estimators=50, random_state=42),
+            'XGBoost': XGBClassifier(use_label_encoder=False, eval_metric="logloss")
         }
+        # Huấn luyện từng model
+        for name, model in models.items():
+            model.fit(X, y)
+        
+        # Stacking model
+        estimators = [(n, m) for n, m in models.items()]
+        stack = StackingClassifier(estimators=estimators, final_estimator=LogisticRegression())
+        stack.fit(X, y)
+        models['Stacking'] = stack
+        return models
+    except Exception as e:
+        st.error(f"Lỗi huấn luyện: {str(e)}")
+        return None
 
-    # ---------------- Feature Engineering ----------------
-    def create_advanced_features(self, history, window=10):
-        if len(history) < window:
-            return np.zeros(20, dtype=np.float32)
-        recent = [1 if x=="Tài" else 0 for x in history[-window:]]
-        features=[]
-        features.extend([np.mean(recent), np.std(recent), np.sum(recent)])
-        streaks = self._streak_features(history)
-        markov = self._markov_features(history)
-        momentum = self._momentum_features(recent)
-        features.extend(streaks + markov + momentum)
-        while len(features)<20:
-            features.append(0.0)
-        return np.array(features[:20], dtype=np.float32)
+# ====== Pattern detector 6 ván ======
+def pattern_detector(history, window=6):
+    if len(history) < window * 2:
+        return 0.5
+    states = {'Tài': 1, 'Xỉu': 0}
+    trans = np.zeros((2,2))
+    for i in range(1,len(history)):
+        prev = states[history[i-1]]
+        curr = states[history[i]]
+        trans[prev,curr] += 1
+    trans /= np.sum(trans, axis=1, keepdims=True) + 1e-6
+    last_state = states[history[-1]]
+    return trans[last_state,1]
 
-    def _streak_features(self, history):
-        if not history: return [0.0,0.0,0.0]
-        current=1; cur_type=history[-1]
-        for i in range(len(history)-2,-1,-1):
-            if history[i]==cur_type: current+=1
-            else: break
-        max_streak=1; c=1
-        for i in range(1,len(history)):
-            if history[i]==history[i-1]: c+=1; max_streak=max(max_streak,c)
-            else: c=1
-        return [current,max_streak,np.random.rand()]
+# ====== Pattern detector 10 ván gần nhất với trọng số ======
+def pattern_detector_weighted(history, window=10):
+    if len(history) < 3:  # ít nhất 3 ván
+        return pattern_detector(history, window=6)
+    actual_window = min(len(history), window)
+    recent_history = history[-actual_window:]
+    states = {'Tài': 1, 'Xỉu': 0}
+    weights = np.linspace(1.5, 0.5, actual_window)  # trọng số giảm dần
+    weighted_sum = sum(weights[i] * states[recent_history[i]] for i in range(actual_window))
+    return weighted_sum / sum(weights)
 
-    def _markov_features(self, history):
-        if len(history)<3: return [0.5,0.5]
-        transitions={'Tài->Tài':0,'Tài->Xỉu':0,'Xỉu->Tài':0,'Xỉu->Xỉu':0}
-        for i in range(1,len(history)):
-            pair=f"{history[i-1]}->{history[i]}"
-            if pair in transitions: transitions[pair]+=1
-        tai_total=transitions['Tài->Tài']+transitions['Tài->Xỉu']
-        xiu_total=transitions['Xỉu->Tài']+transitions['Xỉu->Xỉu']
-        p_tai_tai=transitions['Tài->Tài']/tai_total if tai_total else 0.5
-        p_xiu_tai=transitions['Xỉu->Tài']/xiu_total if xiu_total else 0.5
-        return [p_tai_tai,p_xiu_tai]
+# ====== Dự đoán riêng từng model + pattern ======
+def predict_next(models, history):
+    if len(history) < 6 or models is None:
+        return None
+    latest = np.array([[1 if x=="Tài" else 0 for x in history[-6:]]])
+    predictions = {}
+    for name, model in models.items():
+        if hasattr(model, "predict_proba"):
+            prob = model.predict_proba(latest)[0][1]
+        else:
+            prob = float(model.predict(latest)[0])
+        predictions[name] = prob
+    predictions['Pattern Detector (6 ván)'] = pattern_detector(history)
+    predictions['Pattern Detector (10 ván)'] = pattern_detector_weighted(history)
+    # Final score tổng hợp
+    final_score = (
+        0.5 * predictions.get('Stacking',0.5) + 
+        0.25 * predictions['Pattern Detector (6 ván)'] + 
+        0.25 * predictions['Pattern Detector (10 ván)']
+    )
+    return predictions, final_score
 
-    def _momentum_features(self, recent):
-        if len(recent)<4: return [0.0,0.0]
-        roc=float(recent[-1]-recent[-4])
-        trend=np.polyfit(range(len(recent)), recent,1)[0]
-        return [roc,trend]
-
-    # ---------------- Neural Processing ----------------
-    def _stack_weights(self):
-        if self._stacked_cache is not None: return self._stacked_cache
-        W1=np.stack([a['weights_input'] for a in self.agents])
-        b1=np.stack([a['bias_input'] for a in self.agents])
-        W2=np.stack([a['weights_hidden'] for a in self.agents])
-        b2=np.stack([a['bias_hidden'] for a in self.agents])
-        W3=np.stack([a['weights_output'] for a in self.agents])
-        b3=np.stack([a['bias_output'] for a in self.agents])
-        self._stacked_cache=(W1,b1,W2,b2,W3,b3)
-        return self._stacked_cache
-
-    def _vectorized_predict_probs(self, features):
-        W1,b1,W2,b2,W3,b3=self._stack_weights()
-        hidden1=np.tanh(np.einsum('wf,nfd->nwd', features,W1)+b1[:,np.newaxis,:])
-        hidden2=np.tanh(np.einsum('nwd,ndh->nwh', hidden1,W2)+b2[:,np.newaxis,:])
-        out=1/(1+np.exp(-(np.einsum('nwh,nho->nwo', hidden2,W3)+b3[:,np.newaxis,:])))
-        return np.squeeze(out,axis=2)
-
-    # ---------------- Training ----------------
-    def evaluate_agents(self,history, window=10):
-        if len(history)<window*2: return
-        windows=[]; actuals=[]
-        for i in range(window,len(history)):
-            windows.append(self.create_advanced_features(history[:i], window))
-            actuals.append(1 if history[i]=="Tài" else 0)
-        features=np.stack(windows,axis=0)
-        actuals=np.array(actuals)
-        probs=self._vectorized_predict_probs(features)
-        preds=(probs>0.5).astype(np.int8)
-        acc=np.sum(preds==actuals[np.newaxis,:],axis=1)/len(actuals)
-        for i,a in enumerate(self.agents):
-            a['fitness']=float(acc[i])
-            a['age']+=1
-
-    def evolve_population(self, elite_frac=0.2, mutation_rate=0.08):
-        self.generation+=1
-        # Elite diversification: chọn các loại khác nhau
-        self.agents.sort(key=lambda x:x['fitness'], reverse=True)
-        self.best_fitness=self.agents[0]['fitness']
-        n=len(self.agents)
-        specialization_set=set()
-        elites=[]
-        for a in self.agents:
-            if a['specialization'] not in specialization_set:
-                elites.append(dict(a))
-                specialization_set.add(a['specialization'])
-            if len(elites)>=max(2,int(n*elite_frac)):
-                break
-        new_agents=elites.copy()
-        while len(new_agents)<n:
-            p1=random.choice(elites); p2=random.choice(self.agents)
-            child=self._crossover(p1,p2)
-            self._mutate(child,mutation_rate)
-            new_agents.append(child)
-        self.agents=new_agents
-        self._stacked_cache=None
-        self.evolution_history.append({
-            'generation':self.generation,
-            'best_fitness':self.best_fitness,
-            'avg_fitness':np.mean([a['fitness'] for a in self.agents]),
-            'diversity':len(set(a['specialization'] for a in self.agents))/4.0
-        })
-
-    def _crossover(self,p1,p2):
-        child=self._create_agent()
-        for key in ['weights_input','weights_hidden','weights_output']:
-            mask=np.random.rand(*p1[key].shape)>0.5
-            child[key]=np.where(mask,p1[key],p2[key])
-        return child
-
-    def _mutate(self,agent,rate):
-        for key in ['weights_input','weights_hidden','weights_output']:
-            mask=np.random.rand(*agent[key].shape)<rate
-            agent[key][mask]+=np.random.normal(0,0.2,mask.sum())
-        return agent
-
-    # ---------------- Prediction + Causal Learning ----------------
-    def predict(self,history, window=10):
-        if len(history)<window: return {"Tài":0.5,"Xỉu":0.5},0.5,"Chưa đủ dữ liệu","unknown"
-        features=self.create_advanced_features(history, window)
-        best=max(self.agents,key=lambda a:a['fitness'])
-        h1=np.tanh(np.dot(features,best['weights_input'])+best['bias_input'])
-        h2=np.tanh(np.dot(h1,best['weights_hidden'])+best['bias_hidden'])
-        out=1/(1+np.exp(-(np.dot(h2,best['weights_output'])+best['bias_output'])))
-        p=float(out.squeeze())
-        # Causal attribution
-        contrib={f'feat{i}':abs(val) for i,val in enumerate(features)}
-        main_reason=max(contrib,key=contrib.get)
-        return {"Tài":p,"Xỉu":1-p},p,best['specialization'],main_reason
-
-# ================= Adaptive Evolution + Anti-Overfit =================
-def adaptive_evolve(ai,history,recent_window=15,base_mutation=0.05):
-    if len(history)<recent_window*2: return
-    ai.evaluate_agents(history, window=recent_window)
-    last_preds=[1 if x['prediction']=="Tài" else 0 for x in st.session_state.ai_predictions[-recent_window:]]
-    actuals=[1 if x=="Tài" else 0 for x in history[-recent_window:]]
-    acc=sum([p==a for p,a in zip(last_preds,actuals)])/len(last_preds) if last_preds else 1.0
-    mutation_rate=base_mutation
-    # Anti-overfit: nếu quá chắc chắn, tăng mutation
-    if acc<0.5 or any(x>0.9 for x in [p['confidence'] for p in st.session_state.ai_predictions[-recent_window:]]):
-        mutation_rate=min(0.3, base_mutation+(0.3-base_mutation)*(0.5-acc)/0.5)
-    ai.evolve_population(elite_frac=0.2, mutation_rate=mutation_rate)
-
-# ================= Session =================
-if "history" not in st.session_state: st.session_state.history=[]
-if "evolution_ai" not in st.session_state: st.session_state.evolution_ai=EvolutionaryTaiXiuAI()
-if "ai_predictions" not in st.session_state: st.session_state.ai_predictions=[]
-if "training_log" not in st.session_state: st.session_state.training_log=[]
-
-# ================= Utility =================
+# ====== Thêm kết quả + undo ======
 def add_result(result):
-    if result not in ("Tài","Xỉu"): return
+    st.session_state.undo_stack.append(st.session_state.history.copy())
     st.session_state.history.append(result)
-    if len(st.session_state.history)>1000: st.session_state.history=st.session_state.history[-1000:]
-    if st.session_state.ai_predictions:
-        last=st.session_state.ai_predictions[-1]
-        was_correct=(last['prediction']==result)
-        st.session_state.training_log.append({
-            'timestamp':datetime.now(),
-            'prediction':last['prediction'],
-            'actual':result,
-            'correct':was_correct,
-            'confidence':last['confidence'],
-            'reason':last.get('reason','unknown')
-        })
-    adaptive_evolve(st.session_state.evolution_ai,st.session_state.history)
+    if len(st.session_state.history) > 200:
+        st.session_state.history = st.session_state.history[-200:]
+def undo_last():
+    if st.session_state.undo_stack:
+        st.session_state.history = st.session_state.undo_stack.pop()
 
-def plot_evolution(history):
-    if not history: return None
-    df=pd.DataFrame(history)
-    fig=go.Figure()
-    fig.add_trace(go.Scatter(x=df['generation'],y=df['best_fitness'],mode='lines+markers',name='Best'))
-    fig.add_trace(go.Scatter(x=df['generation'],y=df['avg_fitness'],mode='lines',name='Average'))
-    fig.update_layout(title="Tiến hóa", template='plotly_dark')
-    return fig
+# ====== Export/Import ======
+def export_history():
+    df = pd.DataFrame({"Kết quả": st.session_state.history})
+    return df.to_csv(index=False).encode('utf-8')
+def import_history(uploaded_file):
+    if uploaded_file is not None:
+        df = pd.read_csv(uploaded_file)
+        st.session_state.history = df["Kết quả"].tolist()
+        st.success("Đã import lịch sử!")
 
-# ================= UI =================
-st.title("🧠 AI Tài/Xỉu — Fusion Turbo v2.4 (2025)")
+# ====== Vẽ biểu đồ so sánh xác suất ======
+def plot_prediction(preds):
+    fig, ax = plt.subplots()
+    names = list(preds.keys())
+    values = [preds[n]*100 for n in names]
+    ax.barh(names, values, color=['blue','orange','green','purple','red','brown'])
+    ax.set_xlim(0,100)
+    ax.set_xlabel("Xác suất Tài (%)")
+    ax.set_title("Dự đoán xác suất từng model & pattern detector")
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    buf.seek(0)
+    st.image(buf)
 
-# --- Sidebar ---
-st.sidebar.header("🎮 Điều khiển AI")
-col1,col2=st.sidebar.columns(2)
+# ====== Giao diện ======
+st.title("🎯 AI Dự đoán Tài/Xỉu – ML + Pattern Detector")
+
+col1,col2 = st.columns(2)
 with col1:
-    if st.button("🔄 Huấn luyện 1 thế hệ"):
-        st.session_state.evolution_ai.evaluate_agents(st.session_state.history)
-        st.session_state.evolution_ai.evolve_population()
-        st.rerun()
-with col2:
-    gens=st.sidebar.number_input("Số thế hệ",1,100,5)
-    if st.sidebar.button("⚡ Huấn luyện N thế hệ"):
-        for _ in range(int(gens)):
-            st.session_state.evolution_ai.evaluate_agents(st.session_state.history)
-            st.session_state.evolution_ai.evolve_population()
-        st.rerun()
-if st.sidebar.button("🧹 Khởi tạo lại AI"):
-    st.session_state.evolution_ai=EvolutionaryTaiXiuAI(seed=random.randint(0,99999))
-    st.session_state.ai_predictions=[]
-    st.session_state.training_log=[]
-    st.rerun()
-
-# --- Stats ---
-if st.session_state.evolution_ai.evolution_history:
-    latest=st.session_state.evolution_ai.evolution_history[-1]
-    st.sidebar.markdown(f"**Thế hệ:** {latest['generation']}")
-    st.sidebar.markdown(f"**Fitness tốt nhất:** {latest['best_fitness']:.2%}")
-    st.sidebar.markdown(f"**Fitness TB:** {latest['avg_fitness']:.2%}")
-
-# --- Main ---
-col_main,col_input=st.columns([2,1])
-with col_main:
-    st.subheader("📊 Lịch sử (gần đây)")
-    if st.session_state.history:
-        display=" ".join(["🟢" if x=="Tài" else "🔴" for x in st.session_state.history[-120:]])
-        st.write(display)
-    else: st.info("Chưa có dữ liệu.")
-
-with col_input:
-    st.subheader("🎯 Ghi kết quả")
-    if st.button("🎲 Tài"):
+    if st.button("Nhập Tài"):
         add_result("Tài")
-        st.rerun()
-    if st.button("🎲 Xỉu"):
+    if st.button("Nhập Xỉu"):
         add_result("Xỉu")
-        st.rerun()
+with col2:
+    if st.button("↩️ Undo"):
+        undo_last()
+    uploaded_file = st.file_uploader("Import CSV", type="csv")
+    if uploaded_file:
+        import_history(uploaded_file)
+    csv = export_history()
+    st.download_button("Export CSV", csv, f"history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
 
-# --- Prediction ---
-st.subheader("🤖 Dự đoán AI")
-if len(st.session_state.history)>=10:
-    probs,p_tai,strategy,reason=st.session_state.evolution_ai.predict(st.session_state.history)
-    prediction="Tài" if p_tai>0.5 else "Xỉu"
-    conf=max(p_tai,1-p_tai)
-    st.session_state.ai_predictions.append({'prediction':prediction,'confidence':conf,'reason':reason})
-    c1,c2=st.columns(2)
-    c1.metric("Dự đoán",prediction)
-    c2.metric("Độ tin cậy",f"{conf:.1%}")
-    st.write(f"📝 Nguyên nhân dự đoán chính: {reason}")
-    figp=go.Figure([go.Bar(x=['Tài','Xỉu'],y=[probs['Tài'],probs['Xỉu']])])
-    figp.update_layout(title="Xác suất", template='plotly_dark')
-    st.plotly_chart(figp,use_container_width=True)
-else:
-    st.warning("Cần ít nhất 10 kết quả để AI bắt đầu dự đoán.")
+st.divider()
 
-# --- Evolution chart ---
-if st.session_state.evolution_ai.evolution_history:
-    st.subheader("📈 Tiến hóa & Hiệu suất")
-    fig=plot_evolution(st.session_state.evolution_ai.evolution_history)
-    if fig: st.plotly_chart(fig,use_container_width=True)
+if st.session_state.history:
+    st.write("Lịch sử gần đây:", " → ".join(st.session_state.history[-30:]))
+    if st.button("⚙️ Huấn luyện model"):
+        st.session_state.models = train_models_individual(st.session_state.history)
+        st.success("Đã huấn luyện xong!")
 
-# --- Training Log ---
-if st.session_state.training_log:
-    st.subheader("📋 Nhật ký huấn luyện")
-    df=pd.DataFrame(st.session_state.training_log)
-    st.dataframe(df.tail(30))
-    csv=df.to_csv(index=False).encode("utf-8")
-    st.download_button("⤓ Tải nhật ký (CSV)",csv,"training_log.csv")
-
-# --- Reset ---
-if st.sidebar.button("🔼 Reset lịch sử"):
-    st.session_state.history=[]
-    st.session_state.ai_predictions=[]
-    st.session_state.training_log=[]
-    st.rerun()
+if st.session_state.models and len(st.session_state.history) >=6:
+    preds, final_score = predict_next(st.session_state.models, st.session_state.history)
+    st.subheader(f"🎯 Dự đoán tổng hợp: {'Tài' if final_score>=0.5 else 'Xỉu'} ({final_score:.2%})")
+    st.caption("Dự đoán chi tiết từng model + Pattern Detector")
+    for k,v in preds.items():
+        st.write(f"**{k}** → {v:.2%} ({'Tài' if v>=0.5 else 'Xỉu'})")
+    plot_prediction(preds)
