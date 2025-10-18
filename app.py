@@ -4,7 +4,6 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier, StackingClassifier
 from xgboost import XGBClassifier
-from sklearn.model_selection import TimeSeriesSplit
 import matplotlib.pyplot as plt
 import io
 from datetime import datetime
@@ -43,13 +42,13 @@ def train_models_individual(history):
             'RandomForest': RandomForestClassifier(n_estimators=50, max_depth=5, min_samples_leaf=3, random_state=42),
             'XGBoost': XGBClassifier(use_label_encoder=False, eval_metric="logloss", n_estimators=50, max_depth=3, learning_rate=0.1)
         }
-        # Huấn luyện riêng
+        # Huấn luyện riêng từng model
         for name, model in models.items():
             model.fit(X, y)
-        # Stacking với TimeSeriesSplit
+
+        # Stacking model
         estimators = [(n,m) for n,m in models.items()]
-        tscv = TimeSeriesSplit(n_splits=3)
-        stack = StackingClassifier(estimators=estimators, final_estimator=LogisticRegression(), cv=tscv)
+        stack = StackingClassifier(estimators=estimators, final_estimator=LogisticRegression())
         stack.fit(X, y)
         models['Stacking'] = stack
         return models
@@ -82,7 +81,7 @@ def pattern_detector_weighted(history, window=10):
 
 # ===== Dự đoán từng model + tổng hợp =====
 def predict_next(models, history):
-    if len(history)<6 or models is None: return None
+    if len(history)<6 or models is None: return None, None
     latest = np.array([[1 if x=="Tài" else 0 for x in history[-6:]]])
     preds = {}
     for name, model in models.items():
@@ -93,7 +92,7 @@ def predict_next(models, history):
         preds[name] = prob
     preds['Pattern Detector (6 ván)'] = pattern_detector(history)
     preds['Pattern Detector (10 ván)'] = pattern_detector_weighted(history)
-    # Final tổng hợp
+    # Final tổng hợp với trọng số: Stacking 0.5, Pattern6 0.25, Pattern10 0.25
     final_score = 0.5*preds.get('Stacking',0.5)+0.25*preds['Pattern Detector (6 ván)']+0.25*preds['Pattern Detector (10 ván)']
     return preds, final_score
 
