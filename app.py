@@ -1,7 +1,7 @@
 # =========================================================
 # file: app.py
-# AI Tài/Xỉu — Fusion Turbo v2.3 (2025)
-# Full version: causal learning + adaptive + anti-overfit
+# AI Tài/Xỉu — Fusion Turbo v2.4 (2025)
+# Full version: causal + adaptive + anti-overfit + elite diversification
 # =========================================================
 
 import streamlit as st
@@ -12,12 +12,12 @@ import random
 from collections import deque
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="AI Tài/Xỉu - Fusion Turbo v2.3", layout="wide")
+st.set_page_config(page_title="AI Tài/Xỉu - Fusion Turbo v2.4", layout="wide")
 
 st.sidebar.markdown("""
 ### ⚠️ LƯU Ý
 Ứng dụng mang tính giải trí. Không dùng để đánh bạc thật.
-Phiên bản: **Fusion Turbo v2.3** — causal learning.
+Phiên bản: **Fusion Turbo v2.4** — adaptive causal learning.
 """)
 
 # ================= Evolutionary AI =================
@@ -50,10 +50,10 @@ class EvolutionaryTaiXiuAI:
         }
 
     # ---------------- Feature Engineering ----------------
-    def create_advanced_features(self, history):
-        if len(history) < 10:
+    def create_advanced_features(self, history, window=10):
+        if len(history) < window:
             return np.zeros(20, dtype=np.float32)
-        recent = [1 if x=="Tài" else 0 for x in history[-10:]]
+        recent = [1 if x=="Tài" else 0 for x in history[-window:]]
         features=[]
         features.extend([np.mean(recent), np.std(recent), np.sum(recent)])
         streaks = self._streak_features(history)
@@ -114,11 +114,11 @@ class EvolutionaryTaiXiuAI:
         return np.squeeze(out,axis=2)
 
     # ---------------- Training ----------------
-    def evaluate_agents(self,history):
-        if len(history)<20: return
+    def evaluate_agents(self,history, window=10):
+        if len(history)<window*2: return
         windows=[]; actuals=[]
-        for i in range(10,len(history)):
-            windows.append(self.create_advanced_features(history[:i]))
+        for i in range(window,len(history)):
+            windows.append(self.create_advanced_features(history[:i], window))
             actuals.append(1 if history[i]=="Tài" else 0)
         features=np.stack(windows,axis=0)
         actuals=np.array(actuals)
@@ -126,14 +126,23 @@ class EvolutionaryTaiXiuAI:
         preds=(probs>0.5).astype(np.int8)
         acc=np.sum(preds==actuals[np.newaxis,:],axis=1)/len(actuals)
         for i,a in enumerate(self.agents):
-            a['fitness']=float(acc[i]); a['age']+=1
+            a['fitness']=float(acc[i])
+            a['age']+=1
 
     def evolve_population(self, elite_frac=0.2, mutation_rate=0.08):
         self.generation+=1
+        # Elite diversification: chọn các loại khác nhau
         self.agents.sort(key=lambda x:x['fitness'], reverse=True)
         self.best_fitness=self.agents[0]['fitness']
         n=len(self.agents)
-        elites=[dict(a) for a in self.agents[:max(2,int(n*elite_frac))]]
+        specialization_set=set()
+        elites=[]
+        for a in self.agents:
+            if a['specialization'] not in specialization_set:
+                elites.append(dict(a))
+                specialization_set.add(a['specialization'])
+            if len(elites)>=max(2,int(n*elite_frac)):
+                break
         new_agents=elites.copy()
         while len(new_agents)<n:
             p1=random.choice(elites); p2=random.choice(self.agents)
@@ -163,30 +172,29 @@ class EvolutionaryTaiXiuAI:
         return agent
 
     # ---------------- Prediction + Causal Learning ----------------
-    def predict(self,history):
-        if len(history)<10: return {"Tài":0.5,"Xỉu":0.5},0.5,"Chưa đủ dữ liệu"
-        features=self.create_advanced_features(history)
+    def predict(self,history, window=10):
+        if len(history)<window: return {"Tài":0.5,"Xỉu":0.5},0.5,"Chưa đủ dữ liệu","unknown"
+        features=self.create_advanced_features(history, window)
         best=max(self.agents,key=lambda a:a['fitness'])
         h1=np.tanh(np.dot(features,best['weights_input'])+best['bias_input'])
         h2=np.tanh(np.dot(h1,best['weights_hidden'])+best['bias_hidden'])
         out=1/(1+np.exp(-(np.dot(h2,best['weights_output'])+best['bias_output'])))
         p=float(out.squeeze())
-        # Causal attribution: xem feature nào cao nhất ảnh hưởng dự đoán
-        contrib = {f'feat{i}':abs(val) for i,val in enumerate(features)}
-        main_reason = max(contrib,key=contrib.get)
+        # Causal attribution
+        contrib={f'feat{i}':abs(val) for i,val in enumerate(features)}
+        main_reason=max(contrib,key=contrib.get)
         return {"Tài":p,"Xỉu":1-p},p,best['specialization'],main_reason
 
-# ================= Adaptive Evolution + Causal Learning =================
-def adaptive_evolve(ai,history,recent_window=10,base_mutation=0.05):
-    if len(history)<30: return
-    ai.evaluate_agents(history)
-    if len(st.session_state.ai_predictions)<recent_window:
-        recent_window=len(st.session_state.ai_predictions)
+# ================= Adaptive Evolution + Anti-Overfit =================
+def adaptive_evolve(ai,history,recent_window=15,base_mutation=0.05):
+    if len(history)<recent_window*2: return
+    ai.evaluate_agents(history, window=recent_window)
     last_preds=[1 if x['prediction']=="Tài" else 0 for x in st.session_state.ai_predictions[-recent_window:]]
     actuals=[1 if x=="Tài" else 0 for x in history[-recent_window:]]
     acc=sum([p==a for p,a in zip(last_preds,actuals)])/len(last_preds) if last_preds else 1.0
     mutation_rate=base_mutation
-    if acc<0.5:
+    # Anti-overfit: nếu quá chắc chắn, tăng mutation
+    if acc<0.5 or any(x>0.9 for x in [p['confidence'] for p in st.session_state.ai_predictions[-recent_window:]]):
         mutation_rate=min(0.3, base_mutation+(0.3-base_mutation)*(0.5-acc)/0.5)
     ai.evolve_population(elite_frac=0.2, mutation_rate=mutation_rate)
 
@@ -224,7 +232,7 @@ def plot_evolution(history):
     return fig
 
 # ================= UI =================
-st.title("🧠 AI Tài/Xỉu — Fusion Turbo v2.3 (2025)")
+st.title("🧠 AI Tài/Xỉu — Fusion Turbo v2.4 (2025)")
 
 # --- Sidebar ---
 st.sidebar.header("🎮 Điều khiển AI")
