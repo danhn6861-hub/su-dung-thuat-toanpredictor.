@@ -1,8 +1,8 @@
 streamlit
-opencv-python
 pytesseract
 ta-lib
 pandas
 scikit-learn
 pillow
 numpy
+easyocr
