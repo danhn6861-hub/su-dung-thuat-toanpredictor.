@@ -54,17 +54,17 @@ def extract_number(text):
 
 # Hàm cắt ảnh thông minh để cải thiện chất lượng OCR
 def crop_image(image, crop_area):
-    """Cắt ảnh theo vùng: 'price' (góc trên bên trái) hoặc 'indicators' (vùng dưới)."""
+    """Cắt ảnh theo vùng: 'price_box' (chỉ báo góc trên trái), 'indicator_panel' (vùng dưới)."""
     width, height = image.size
     
-    if crop_area == 'price':
-        # Vùng giá (tối ưu hóa: tập trung vào giá ở góc trên bên trái)
+    if crop_area == 'price_box':
+        # Vùng chứa Price, SuperTrend, EMA200 labels (Tập trung vào Top Left 1/3)
         left = 0
         top = 0
         right = width // 3
-        bottom = height // 5 # Tăng vùng cao hơn một chút
-    elif crop_area == 'indicators':
-        # Vùng RSI, MACD (tối ưu hóa: 1/3 dưới cùng của biểu đồ)
+        bottom = height * 2 // 5 # Mở rộng vùng cao hơn để bắt được ST/EMA tốt hơn
+    elif crop_area == 'indicator_panel':
+        # Vùng chứa MACD, RSI, Volume sub-panels (1/3 dưới cùng của biểu đồ)
         left = 0
         top = height * 2 // 3
         right = width
@@ -81,29 +81,32 @@ def analyze_image(image):
     
     data = {"price": None, "supertrend": None, "ema200": None, "volume": None, "rsi": None, "macd": None}
 
-    # 1. OCR Vùng Giá (Tối ưu cho số lớn)
-    img_price = crop_image(image, 'price')
-    result_price = reader.readtext(np.array(img_price), detail=0, paragraph=False)
+    # 1. OCR Vùng Chỉ báo Giá (Price, ST, EMA) - Vùng này có độ ưu tiên cao nhất
+    img_price_box = crop_image(image, 'price_box')
+    result_price_box = reader.readtext(np.array(img_price_box), detail=0, paragraph=False)
     
-    for text in result_price:
+    for text in result_price_box:
         text_lower = text.strip().lower()
         num = extract_number(text)
         
-        # Trích xuất Giá
-        # Giá hiện tại là số lớn nhất và nằm ở hàng đầu tiên
+        # Trích xuất Giá (thường là số lớn nhất)
         if num is not None and (data["price"] is None or num > data["price"]):
              data["price"] = num
         
-        # Trích xuất SuperTrend và EMA200 (thường nằm gần giá)
-        if data["supertrend"] is None and any(keyword in text_lower for keyword in ["supertrend", "st"]):
+        # Trích xuất SuperTrend (Ưu tiên)
+        if data["supertrend"] is None and any(keyword in text_lower for keyword in ["supertrend", "st", "atr"]):
             # Lấy giá trị đầu tiên sau từ khóa Supertrend
-            data["supertrend"] = num
-        if data["ema200"] is None and any(keyword in text_lower for keyword in ["ema200", "ema 200"]):
+            if num is not None:
+                data["supertrend"] = num
+        
+        # Trích xuất EMA200 (Ưu tiên)
+        if data["ema200"] is None and any(keyword in text_lower for keyword in ["ema200", "ema 200", "ema"]):
             # Lấy giá trị đầu tiên sau từ khóa EMA200
-            data["ema200"] = num
+            if num is not None:
+                data["ema200"] = num
 
-    # 2. OCR Vùng Chỉ báo (RSI, MACD, Volume)
-    img_indicators = crop_image(image, 'indicators')
+    # 2. OCR Vùng Chỉ báo Dưới (RSI, MACD, Volume)
+    img_indicators = crop_image(image, 'indicator_panel')
     result_indicators = reader.readtext(np.array(img_indicators), detail=0, paragraph=False)
     
     for text in result_indicators:
@@ -115,34 +118,25 @@ def analyze_image(image):
             if num is not None and 0 <= num <= 100:
                 data["rsi"] = num
         
-        # MACD (giá trị đường MACD)
+        # MACD (giá trị đường MACD hoặc Hist)
         elif "macd" in text_lower and data["macd"] is None:
-            data["macd"] = num
+            if num is not None:
+                data["macd"] = num
 
         # Volume (thường nằm ở dưới cùng)
         elif data["volume"] is None and any(keyword in text_lower for keyword in ["volume", "khối lượng"]):
-            data["volume"] = num # Volume có thể là số lớn, dùng lại logic extract_number
+            if num is not None:
+                data["volume"] = num # Volume có thể là số lớn, dùng lại logic extract_number
 
-    # Kiểm tra Volume trong vùng giá (thường có mục Khối lượng)
-    if data["volume"] is None:
-        for text in result_price:
-            text_lower = text.strip().lower()
-            num = extract_number(text)
-            if data["volume"] is None and any(keyword in text_lower for keyword in ["volume", "khối lượng"]):
-                data["volume"] = num
-        
     # Xử lý giá trị nếu không tìm thấy (giả định)
     if data["price"] is None:
         # Fallback: lấy số lớn nhất từ tất cả các lần quét (có thể là giá)
-        all_nums = [extract_number(t) for t in result_price + result_indicators if extract_number(t) is not None]
+        all_nums = [extract_number(t) for t in result_price_box + result_indicators if extract_number(t) is not None]
         if all_nums:
             data["price"] = max(all_nums)
 
-    # Nếu EMA200, Supertrend không đọc được, giả định chúng bằng giá (cho mô hình ML)
-    if data["supertrend"] is None and data["price"] is not None:
-        data["supertrend"] = data["price"]
-    if data["ema200"] is None and data["price"] is not None:
-        data["ema200"] = data["price"]
+    # ĐÃ XÓA LOGIC FALLBACK GIẢ ĐỊNH GIÁ = ST/EMA TẠI ĐÂY
+    # Dữ liệu JSON hiển thị sẽ phản ánh giá trị OCR THỰC TẾ (NULL nếu không đọc được)
 
     logger.info(f"OCR Data: {data}")
     return data
@@ -237,9 +231,8 @@ def decide_trade(data, model_acc_vol):
         if model is None or supertrend_upper_band is None:
              return "Không đủ dữ liệu cơ bản hoặc tính toán chỉ báo giả lập thất bại. Vui lòng chụp ảnh rõ ràng hơn."
 
-        # Ưu tiên giá trị OCR, nếu không có thì lấy giá trị giả lập cuối cùng
-        # Chú ý: supertrend_upper_band bây giờ là giá trị đơn thay vì Series
-        supertrend = data["supertrend"] if data["supertrend"] else supertrend_upper_band
+        # Xử lý giá trị OCR: Nếu NULL thì sử dụng giá trị giả lập
+        supertrend = data["supertrend"] if data["supertrend"] is not None else supertrend_upper_band
         ema200 = data["ema200"] if data["ema200"] is not None else data["price"] # Dùng giá nếu EMA không đọc được
         rsi = data["rsi"] if data["rsi"] is not None else 50
         macd_val = data["macd"] if data["macd"] is not None else 0
@@ -338,7 +331,7 @@ if uploaded_file:
                 data = analyze_image(image)
                 
             st.markdown("---")
-            st.subheader("📊 Dữ Liệu OCR Đã Trích Xuất")
+            st.subheader("📊 Dữ Liệu OCR Đã Trích Xuất (Kết quả thô)")
             # Cải thiện logic kiểm tra dữ liệu quan trọng
             if data["price"] is None:
                 st.error("❌ Không đọc được **GIÁ** hiện tại. Vui lòng chụp ảnh rõ hơn.")
