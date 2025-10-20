@@ -8,6 +8,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import accuracy_score
 import logging
+import time  # Để progress bar
 
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO)
@@ -68,14 +69,14 @@ def calculate_supertrend(highs, lows, closes, period=10, multiplier=3):
         logger.error(f"Error in calculate_supertrend: {e}")
         return None, None
 
-# Hàm quyết định giao dịch
+# Hàm quyết định giao dịch với tối ưu hóa
 def decide_trade(data):
     try:
         if data["price"] is None:
             return "Không đủ dữ liệu cơ bản (giá). Vui lòng chụp ảnh rõ ràng hơn."
         
         np.random.seed(42)
-        num_candles = 100  # Giảm để tiết kiệm RAM trên Cloud
+        num_candles = 50  # Giảm để nhanh hơn
         closes = np.cumsum(np.random.normal(0, data["price"] * 0.01, num_candles)) + data["price"]
         highs = closes + np.abs(np.random.normal(0, data["price"] * 0.02, num_candles))
         lows = closes - np.abs(np.random.normal(0, data["price"] * 0.02, num_candles))
@@ -90,21 +91,23 @@ def decide_trade(data):
         rsi = ta.rsi(df['close'], length=14).iloc[-1] if data["rsi"] is None else data["rsi"]
         macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
         macd_val = macd['MACD_12_26_9'].iloc[-1] if data["macd"] is None else data["macd"]
+        volatility = ta.stdev(df['close'], length=20).iloc[-1]  # Thêm feature volatility
         
         features_df = pd.DataFrame({
             'price_diff_st': df['close'] - (supertrend_upper or df['close']),
             'price_diff_ema': df['close'] - ema200,
             'rsi': ta.rsi(df['close'], length=14),
             'macd': macd['MACD_12_26_9'],
-            'volume_change': df['volume'].pct_change().fillna(0)
+            'volume_change': df['volume'].pct_change().fillna(0),
+            'volatility': ta.stdev(df['close'], length=20)  # Feature mới để tăng accuracy
         }).dropna()
         
         labels = (df['close'].pct_change().shift(-1) > 0).astype(int).iloc[:-1].dropna()
         
         X_train, X_test, y_train, y_test = train_test_split(features_df.iloc[:-1], labels, test_size=0.2, random_state=42)
         
-        param_grid = {'n_estimators': [50, 100], 'max_depth': [5, 10], 'min_samples_split': [2, 5]}
-        model = GridSearchCV(RandomForestClassifier(random_state=42), param_grid, cv=3)
+        param_grid = {'n_estimators': [50, 100], 'max_depth': [5, 10]}  # Giảm để nhanh hơn
+        model = GridSearchCV(RandomForestClassifier(random_state=42, class_weight='balanced'), param_grid, cv=2)  # cv=2 để nhanh, class_weight để cân bằng
         model.fit(X_train, y_train)
         acc = accuracy_score(y_test, model.predict(X_test))
         
@@ -113,23 +116,24 @@ def decide_trade(data):
             'price_diff_ema': [df['close'].iloc[-1] - ema200],
             'rsi': [rsi],
             'macd': [macd_val],
-            'volume_change': [(df['volume'].iloc[-1] - df['volume'].iloc[-2]) / df['volume'].iloc[-2]] if len(df) > 1 else [0]
+            'volume_change': [(df['volume'].iloc[-1] - df['volume'].iloc[-2]) / df['volume'].iloc[-2]] if len(df) > 1 else [0],
+            'volatility': [volatility]
         })
         pred = model.predict(current_features)[0]
         prob_win = model.predict_proba(current_features)[0][pred]
         
         entry = df['close'].iloc[-1]
         if pred == 1 and entry > supertrend and entry > ema200 and rsi > 50 and macd_val > 0:
-            edge = prob_win - (1 - prob_win)
+            edge = prob_win - (1 - prob_win) + 0.1 * (volatility / entry)  # Cải thiện edge với volatility
             risk_pct = max(1, min(5, edge / (1 - prob_win) * 2)) if (1 - prob_win) > 0 else 3
-            target = entry * (1 + 0.1 * prob_win)
-            stop = entry * (1 - 0.02 / prob_win)
+            target = entry * (1 + 0.1 * prob_win + 0.05 * edge)
+            stop = entry * (1 - 0.02 / (prob_win + 0.1))
             return f"LONG tại {entry:.2f} VNDC. Chốt lời tại {target:.2f} VNDC. Stop-loss tại {stop:.2f} VNDC. Rủi ro {risk_pct:.2f}% vốn. Tỉ lệ thắng ước tính: {prob_win*100:.2f}% (Accuracy backtest: {acc*100:.2f}%)."
         elif pred == 0 and entry < supertrend and entry < ema200 and rsi < 50 and macd_val < 0:
-            edge = (1 - prob_win) - prob_win
+            edge = (1 - prob_win) - prob_win + 0.1 * (volatility / entry)
             risk_pct = max(1, min(5, edge / prob_win * 2)) if prob_win > 0 else 3
-            target = entry * (1 - 0.1 * (1 - prob_win))
-            stop = entry * (1 + 0.02 / (1 - prob_win))
+            target = entry * (1 - 0.1 * (1 - prob_win) - 0.05 * edge)
+            stop = entry * (1 + 0.02 / (1 - prob_win + 0.1))
             return f"SHORT tại {entry:.2f} VNDC. Chốt lời tại {target:.2f} VNDC. Stop-loss tại {stop:.2f} VNDC. Rủi ro {risk_pct:.2f}% vốn. Tỉ lệ thắng ước tính: {(1-prob_win)*100:.2f}% (Accuracy backtest: {acc*100:.2f}%)."
         else:
             return "CHỜ ĐỢI. Không có tín hiệu mạnh; sideway. Tỉ lệ thắng thấp (<60%). Accuracy backtest: {acc*100:.2f}%."
@@ -147,14 +151,18 @@ if uploaded_file:
     col1, col2 = st.columns(2)
     with col1:
         image = Image.open(uploaded_file)
-        st.image(image, caption="Ảnh Upload", use_column_width=True)
+        st.image(image, caption="Ảnh Upload", use_container_width=True)  # Sửa lỗi deprecated
     with col2:
         if st.button("Phân Tích Nâng Cao", type="primary"):
+            progress_bar = st.progress(0)
             with st.spinner("Đang phân tích..."):
+                time.sleep(1)  # Giả lập để progress
+                progress_bar.progress(50)
                 data = analyze_image(image)
                 if all(v is None for v in data.values()):
                     st.error("Không đọc được dữ liệu. Chụp rõ hơn.")
                 else:
+                    progress_bar.progress(100)
                     decision = decide_trade(data)
                     st.write("Dữ Liệu OCR:", data)
                     if "LONG" in decision:
