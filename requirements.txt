@@ -1,8 +1,7 @@
 streamlit
-pytesseract
-ta-lib
+easyocr
 pandas
+pandas_ta
 scikit-learn
 pillow
 numpy
-easyocr
