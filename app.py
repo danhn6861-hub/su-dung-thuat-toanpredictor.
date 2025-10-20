@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import cv2
 import numpy as np
@@ -133,22 +132,3 @@ st.set_page_config(page_title="AI Trading Analyzer Pro", layout="wide")
 st.sidebar.title("Cài Đặt")
 st.sidebar.info("Upload ảnh màn hình ONUS để phân tích. AI dùng OCR nâng cao, TA-Lib, và ML tối ưu (RandomForest + tuning) cho tỉ lệ thắng cao.")
 uploaded_file = st.file_uploader("Upload Ảnh Màn Hình ONUS", type=["jpg", "png"], help="Chụp rõ: Giá, SuperTrend, EMA200, RSI, MACD, Volume.")
-
-if uploaded_file:
-    col1, col2 = st.columns(2)
-    with col1:
-        image = Image.open(uploaded_file)
-        st.image(image, caption="Ảnh Upload", use_column_width=True)
-    with col2:
-        if st.button("Phân Tích Nâng Cao", type="primary"):
-            with st.spinner("Đang phân tích với ML tối ưu..."):
-                data = analyze_image(image)
-                decision = decide_trade(data)
-                st.write("Dữ Liệu OCR:", data)
-                if "LONG" in decision:
-                    st.success(decision)
-                elif "SHORT" in decision:
-                    st.error(decision)
-                else:
-                    st.warning(decision)
-```
