@@ -4,7 +4,6 @@ from PIL import Image
 from easyocr import Reader
 import pandas as pd
 import pandas_ta as ta
-# Đã sửa lỗi chính tả tại đây: model_model_selection -> model_selection
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import accuracy_score
@@ -23,7 +22,8 @@ def get_ocr_reader():
         reader = Reader(['en', 'vi'], gpu=False)
         return reader
     except Exception as e:
-        st.error(f"Lỗi khởi tạo EasyOCR: {e}. Vui lòng đảm bảo các thư viện đã được cài đặt và các file model đã có.")
+        # Cung cấp hướng dẫn rõ ràng nếu lỗi xảy ra
+        st.error(f"Lỗi khởi tạo EasyOCR: {e}. Vui lòng đảm bảo các thư viện cần thiết đã được cài đặt.")
         return None
 
 reader = get_ocr_reader()
@@ -32,19 +32,22 @@ reader = get_ocr_reader()
 def extract_number(text):
     """Trích xuất số từ chuỗi văn bản, xử lý định dạng số lớn."""
     try:
-        # Loại bỏ các ký tự không phải số, dấu chấm, dấu phẩy
+        # Xử lý các trường hợp phổ biến: 8,971.893 (giá) hoặc 100,200 (chỉ báo)
         num_str = ''.join([c for c in text if c.isdigit() or c in ['.', ',']]).replace(',', '.')
         
-        # Nếu số quá lớn (ví dụ: giá 31,430), đôi khi OCR có thể đọc dính dấu phẩy.
-        # Thử loại bỏ dấu chấm nếu nó ở vị trí hàng nghìn
+        # Nếu số quá lớn (ví dụ: giá 8,971.893), đôi khi OCR có thể đọc dính dấu phẩy.
+        # Loại bỏ các dấu chấm/phẩy thừa nếu chúng không phải là dấu thập phân cuối cùng
         if num_str.count('.') > 1:
             # Giữ lại dấu chấm cuối cùng (thường là thập phân) và loại bỏ các dấu chấm khác
             parts = num_str.split('.')
-            if len(parts[-1]) != 3: # Nếu phần cuối không phải 3 số, có thể là số thập phân
-                num_str = ''.join(parts[:-1]) + '.' + parts[-1]
+            # Nếu phần thập phân (cuối cùng) có 3 chữ số, đây có thể là định dạng VND
+            if len(parts[-1]) == 3 and len(parts) > 1:
+                # Ví dụ: 8.971.893 -> 8971893
+                num_str = "".join(parts)
             else:
-                num_str = ''.join(parts) # Nếu là 31.430 -> 31430
-
+                # Nếu không phải, giữ lại dấu thập phân cuối cùng
+                num_str = "".join(parts[:-1]) + "." + parts[-1]
+                
         return float(num_str) if num_str else None
     except:
         return None
@@ -55,14 +58,13 @@ def crop_image(image, crop_area):
     width, height = image.size
     
     if crop_area == 'price':
-        # Vùng giá (thường ở góc trên bên trái)
-        # Tùy chỉnh theo ảnh ONUS: Giới hạn chiều rộng ở 1/4 và chiều cao ở 1/4
+        # Vùng giá (tối ưu hóa: tập trung vào giá ở góc trên bên trái)
         left = 0
         top = 0
         right = width // 3
-        bottom = height // 4
+        bottom = height // 5 # Tăng vùng cao hơn một chút
     elif crop_area == 'indicators':
-        # Vùng RSI, MACD (thường ở 1/3 dưới cùng của màn hình)
+        # Vùng RSI, MACD (tối ưu hóa: 1/3 dưới cùng của biểu đồ)
         left = 0
         top = height * 2 // 3
         right = width
@@ -88,18 +90,19 @@ def analyze_image(image):
         num = extract_number(text)
         
         # Trích xuất Giá
-        if num is not None and num > 1000: # Giả định giá trị lớn nhất là giá
-             if data["price"] is None or num > data["price"]:
-                data["price"] = num
+        # Giá hiện tại là số lớn nhất và nằm ở hàng đầu tiên
+        if num is not None and (data["price"] is None or num > data["price"]):
+             data["price"] = num
         
         # Trích xuất SuperTrend và EMA200 (thường nằm gần giá)
         if data["supertrend"] is None and any(keyword in text_lower for keyword in ["supertrend", "st"]):
+            # Lấy giá trị đầu tiên sau từ khóa Supertrend
             data["supertrend"] = num
         if data["ema200"] is None and any(keyword in text_lower for keyword in ["ema200", "ema 200"]):
+            # Lấy giá trị đầu tiên sau từ khóa EMA200
             data["ema200"] = num
 
-
-    # 2. OCR Vùng Chỉ báo (RSI, MACD)
+    # 2. OCR Vùng Chỉ báo (RSI, MACD, Volume)
     img_indicators = crop_image(image, 'indicators')
     result_indicators = reader.readtext(np.array(img_indicators), detail=0, paragraph=False)
     
@@ -108,29 +111,39 @@ def analyze_image(image):
         num = extract_number(text)
         
         if "rsi" in text_lower and data["rsi"] is None:
-            # RSI thường là số 2 chữ số
+            # RSI thường là số 2 chữ số (giá trị RSI thực)
             if num is not None and 0 <= num <= 100:
                 data["rsi"] = num
         
-        # MACD thường có giá trị nhỏ, dương hoặc âm
+        # MACD (giá trị đường MACD)
         elif "macd" in text_lower and data["macd"] is None:
             data["macd"] = num
 
-    # 3. OCR Toàn bộ ảnh (fallback và Volume)
-    img_np_full = np.array(image)
-    result_full = reader.readtext(img_np_full, detail=0, paragraph=False)
+        # Volume (thường nằm ở dưới cùng)
+        elif data["volume"] is None and any(keyword in text_lower for keyword in ["volume", "khối lượng"]):
+            data["volume"] = num # Volume có thể là số lớn, dùng lại logic extract_number
 
-    for text in result_full:
-        text_lower = text.strip().lower()
-        num = extract_number(text)
+    # Kiểm tra Volume trong vùng giá (thường có mục Khối lượng)
+    if data["volume"] is None:
+        for text in result_price:
+            text_lower = text.strip().lower()
+            num = extract_number(text)
+            if data["volume"] is None and any(keyword in text_lower for keyword in ["volume", "khối lượng"]):
+                data["volume"] = num
         
-        if data["volume"] is None and any(keyword in text_lower for keyword in ["volume", "khối lượng"]):
-            data["volume"] = num
-        
-        # Fallback cho giá (nếu chưa tìm thấy)
-        if data["price"] is None and num is not None and num > 1000:
-            data["price"] = num
-        
+    # Xử lý giá trị nếu không tìm thấy (giả định)
+    if data["price"] is None:
+        # Fallback: lấy số lớn nhất từ tất cả các lần quét (có thể là giá)
+        all_nums = [extract_number(t) for t in result_price + result_indicators if extract_number(t) is not None]
+        if all_nums:
+            data["price"] = max(all_nums)
+
+    # Nếu EMA200, Supertrend không đọc được, giả định chúng bằng giá (cho mô hình ML)
+    if data["supertrend"] is None and data["price"] is not None:
+        data["supertrend"] = data["price"]
+    if data["ema200"] is None and data["price"] is not None:
+        data["ema200"] = data["price"]
+
     logger.info(f"OCR Data: {data}")
     return data
         
@@ -141,7 +154,8 @@ def calculate_supertrend(highs, lows, closes, period=10, multiplier=3):
         hl2 = (highs + lows) / 2
         upper = hl2 + (multiplier * atr)
         lower = hl2 - (multiplier * atr)
-        return upper.iloc[-1], lower.iloc[-1]
+        # Trả về cả hai đường upper và lower (upper dùng cho tính năng)
+        return upper, lower 
     except Exception as e:
         logger.error(f"Error in calculate_supertrend: {e}")
         return None, None
@@ -151,10 +165,12 @@ def calculate_supertrend(highs, lows, closes, period=10, multiplier=3):
 def train_model(data):
     """Tạo dữ liệu giả lập, tính toán features và labels, huấn luyện mô hình."""
     if data["price"] is None:
-        return None, 0.5, 0 # Trả về mô hình None, acc thấp và 0 volatility nếu thiếu giá
+        # Lỗi cơ bản: không có giá. Trả về giá trị mặc định để tránh lỗi.
+        return None, 0.5, 0, None
 
     np.random.seed(42)
-    num_candles = 100 # Tăng số lượng nến giả lập để mô hình học tốt hơn
+    # Tăng số lượng nến giả lập lên 200 để đảm bảo chỉ báo dài hạn (EMA200, ATR) có đủ dữ liệu
+    num_candles = 200 
     
     # Tạo chuỗi giá
     closes = np.cumsum(np.random.normal(0, data["price"] * 0.005, num_candles)) + data["price"]
@@ -166,7 +182,17 @@ def train_model(data):
     df = pd.DataFrame({"high": highs, "low": lows, "close": closes, "volume": volumes})
     
     # Tính toán Chỉ báo Kỹ thuật (Sử dụng dữ liệu giả lập)
-    supertrend_upper, _ = calculate_supertrend(df['high'], df['low'], df['close'])
+    supertrend_series, _ = calculate_supertrend(df['high'], df['low'], df['close'])
+    
+    # KIỂM TRA SUPERTRND: Nếu SuperTrend không tính được, return None sớm để tránh AttributeError
+    if supertrend_series is None:
+        logger.error("SuperTrend calculation failed on dummy data.")
+        return None, 0.5, 0, None # Trả về None để hàm decide_trade xử lý
+
+    # Lấy giá trị cuối cùng của Supertrend
+    supertrend_upper = supertrend_series.iloc[-1]
+    
+    # Tiếp tục tính toán các chỉ báo khác
     ema200_series = ta.ema(df['close'], length=200).fillna(method='bfill')
     rsi_series = ta.rsi(df['close'], length=14).fillna(50)
     macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
@@ -175,7 +201,8 @@ def train_model(data):
 
     # Chuẩn bị Dữ liệu cho ML
     features_df = pd.DataFrame({
-        'price_diff_st': df['close'] - supertrend_upper,
+        # Sử dụng supertrend_series thay vì supertrend_upper để đảm bảo có đủ dữ liệu lịch sử
+        'price_diff_st': df['close'] - supertrend_series,
         'price_diff_ema': df['close'] - ema200_series,
         'rsi': rsi_series,
         'macd': macd_series,
@@ -198,19 +225,21 @@ def train_model(data):
     
     acc = accuracy_score(y_test, model.predict(X_test))
     
-    # Trả về mô hình, độ chính xác và volatility của cây nến cuối cùng
-    return model, acc, volatility_series.iloc[-1], supertrend_upper
+    # Trả về mô hình, độ chính xác, volatility và SuperTrend của cây nến cuối cùng
+    return model, acc, volatility_series.iloc[-1], supertrend_series.iloc[-1]
 
 # Hàm quyết định giao dịch với tối ưu hóa ML
 def decide_trade(data, model_acc_vol):
     try:
         model, acc, volatility, supertrend_upper_band = model_acc_vol
         
-        if model is None:
-             return "Không đủ dữ liệu cơ bản (giá). Vui lòng chụp ảnh rõ ràng hơn."
+        # Thêm điều kiện kiểm tra nếu huấn luyện thất bại
+        if model is None or supertrend_upper_band is None:
+             return "Không đủ dữ liệu cơ bản hoặc tính toán chỉ báo giả lập thất bại. Vui lòng chụp ảnh rõ ràng hơn."
 
         # Ưu tiên giá trị OCR, nếu không có thì lấy giá trị giả lập cuối cùng
-        supertrend = data["supertrend"] if data["supertrend"] else supertrend_upper_band.iloc[-1]
+        # Chú ý: supertrend_upper_band bây giờ là giá trị đơn thay vì Series
+        supertrend = data["supertrend"] if data["supertrend"] else supertrend_upper_band
         ema200 = data["ema200"] if data["ema200"] is not None else data["price"] # Dùng giá nếu EMA không đọc được
         rsi = data["rsi"] if data["rsi"] is not None else 50
         macd_val = data["macd"] if data["macd"] is not None else 0
@@ -310,8 +339,9 @@ if uploaded_file:
                 
             st.markdown("---")
             st.subheader("📊 Dữ Liệu OCR Đã Trích Xuất")
-            if all(v is None for v in data.values()):
-                st.error("❌ Không đọc được dữ liệu quan trọng nào. Vui lòng chụp ảnh rõ hơn và kiểm tra các chỉ báo.")
+            # Cải thiện logic kiểm tra dữ liệu quan trọng
+            if data["price"] is None:
+                st.error("❌ Không đọc được **GIÁ** hiện tại. Vui lòng chụp ảnh rõ hơn.")
                 progress_bar.progress(100)
             else:
                 st.json(data)
