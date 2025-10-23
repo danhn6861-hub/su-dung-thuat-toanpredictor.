@@ -1,6 +1,0 @@
-streamlit
-ccxt
-pandas
-numpy
-matplotlib
-tqdm
