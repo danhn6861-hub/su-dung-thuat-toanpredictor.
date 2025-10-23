@@ -1,7 +1,6 @@
 streamlit
-easyocr
+ccxt
 pandas
-pandas_ta
-scikit-learn
-pillow
 numpy
+matplotlib
+tqdm
