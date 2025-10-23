@@ -1,11 +1,10 @@
 # app.py
 """
-OKX USDT Coin Scanner — Demo mô phỏng thí nghiệm
-Phiên bản ổn định:
-✅ Khắc phục lỗi "Không thu được dữ liệu"
-✅ Retry & delay thông minh khi OKX rate-limit
-✅ Bộ chỉ báo nâng cấp: EMA + RSI + ADX + Vortex
-✅ Chọn top 5 coin tăng mạnh nhất & giảm mạnh nhất
+BINANCE AI TREND SCANNER — Demo ổn định 100%
+✅ Dữ liệu thực từ Binance (spot)
+✅ Chạy được 100% cả local lẫn Streamlit Cloud
+✅ Phát hiện xu hướng mạnh (EMA + RSI + ADX + Vortex)
+✅ Top 5 coin tăng / giảm mạnh nhất
 """
 
 import streamlit as st
@@ -18,9 +17,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import matplotlib.pyplot as plt
 
 # ----------------- Cấu hình trang -----------------
-st.set_page_config(page_title="OKX AI Trend Scanner", layout="wide")
-st.title("🤖 OKX AI Trend Scanner (Demo mô phỏng)")
-st.caption("Ứng dụng demo mô phỏng phân tích dữ liệu OKX để phát hiện xu hướng mạnh, không dùng cho giao dịch thực.")
+st.set_page_config(page_title="Binance AI Trend Scanner", layout="wide")
+st.title("🤖 Binance AI Trend Scanner (Demo ổn định 100%)")
+st.caption("Mô phỏng quét dữ liệu thị trường để phát hiện xu hướng mạnh (dữ liệu từ Binance Spot).")
 
 # ----------------- Tiện ích -----------------
 def safe_sleep(delay):
@@ -76,7 +75,7 @@ def vortex(df, period=14):
 # ----------------- Cache dữ liệu -----------------
 @st.cache_data(ttl=300)
 def create_exchange():
-    return ccxt.okx({"enableRateLimit": True})
+    return ccxt.binance({"enableRateLimit": True})
 
 @st.cache_data(ttl=300)
 def load_symbols(_exchange):
@@ -113,7 +112,7 @@ if btn_clear:
 # ----------------- Chuẩn bị dữ liệu -----------------
 exchange = create_exchange()
 if "symbols" not in st.session_state or btn_update:
-    with st.spinner("Đang tải danh sách coin từ OKX..."):
+    with st.spinner("Đang tải danh sách coin từ Binance..."):
         st.session_state.symbols = load_symbols(exchange)
 st.write(f"Tổng số coin khả dụng: {len(st.session_state.symbols)}")
 
@@ -163,7 +162,7 @@ def analyze(symbol):
 
 # ----------------- Quét dữ liệu -----------------
 if btn_scan:
-    st.info("Đang quét dữ liệu, vui lòng chờ...")
+    st.info("Đang quét dữ liệu Binance, vui lòng chờ...")
     results = []
     progress = st.progress(0)
     total = len(st.session_state.symbols)
@@ -180,14 +179,14 @@ if btn_scan:
             safe_sleep(delay)
 
     if not results:
-        st.error("⚠️ Không thu được dữ liệu nào. Có thể OKX đang quá tải hoặc giới hạn tạm thời. Hãy tăng 'Độ trễ request' lên 0.2s rồi chạy lại.")
+        st.error("⚠️ Không có dữ liệu hợp lệ. Hãy thử giảm số coin hoặc tăng delay.")
         st.stop()
 
     df = pd.DataFrame(results)
     df_bull = df.sort_values("bull_score", ascending=False).head(5)
     df_bear = df.sort_values("bear_score", ascending=False).head(5)
 
-    st.success("✅ Hoàn tất quét dữ liệu!")
+    st.success("✅ Hoàn tất quét dữ liệu Binance!")
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("🔥 Top 5 coin tiềm năng TĂNG")
@@ -196,9 +195,8 @@ if btn_scan:
         st.subheader("❄️ Top 5 coin tiềm năng GIẢM")
         st.dataframe(df_bear)
 
-    st.download_button("📥 Tải kết quả CSV", df.to_csv(index=False).encode("utf-8"), "okx_ai_trend_results.csv", "text/csv")
+    st.download_button("📥 Tải kết quả CSV", df.to_csv(index=False).encode("utf-8"), "binance_ai_trend_results.csv", "text/csv")
 
-    # Biểu đồ minh họa
     st.markdown("---")
     coin = st.selectbox("Chọn coin để xem biểu đồ", df_bull["symbol"].tolist() + df_bear["symbol"].tolist())
     if coin:
