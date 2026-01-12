@@ -2,4 +2,9 @@ streamlit
 ccxt
 pandas
 numpy
+aiohttp
+rich
 matplotlib
+python-dateutil
+numba
+websockets
