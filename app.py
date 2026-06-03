@@ -8,123 +8,130 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- 2. KHU VỰC THAY ĐỔI LINK ẢNH ---
-# Bạn có thể tự do thay đổi hai link ảnh/GIF dưới này theo ý muốn nhé!
-LINK_ANH_HOP_QUA = "https://i.pinimg.com/736x/3f/49/93/3f4993bff0712b5bc855e6ecb77d3dd9.jpg" 
-LINK_ANH_DOA_HOA = "https://i.pinimg.com/originals/91/97/8e/91978e87493a595ec7695325785a9df4.gif"
+# --- 2. KHU VỰC THAY ĐỔI LINK ẢNH (ĐÃ THAY BẰNG CODELINK TRONG SUỐT 100%) ---
+# Mẹo: Các link dưới đây lấy từ Giphy Sticker nên đảm bảo xóa phông hoàn toàn.
+# Nếu muốn tự thay, hãy lên giphy.com/stickers (phải chọn mục STICKERS thì nền mới trong suốt).
+LINK_ANH_HOP_QUA = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM3Z0NTA4YnFwYmN4Yms3YnY0NTA2bms0Ym15NDFpYmVidG4xdTFvcyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/vX79B48fKgnW9YosvO/giphy.gif" 
+LINK_ANH_DOA_HOA = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbW90YzAwbnd6ZHp4N2pndjZ6YTJ5YXBwYmZ4MXB5M29tN3k0ZXFxeSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/8g759bSgK9AOkbYvL9/giphy.gif"
 
 # --- 3. CSS CUSTOM: VŨ TRỤ & GLASSMORPHISM ---
-# Đã xóa chữ 'f' ở đầu chuỗi để loại bỏ hoàn toàn lỗi SyntaxError f-string
 st.markdown("""
 <style>
-    /* Nền dải ngân hà động */
+    /* Nền dải ngân hà sâu thẳm */
     .stApp {
         background: radial-gradient(ellipse at bottom, #1B2735 0%, #090A0F 100%);
-        overflow: hidden;
+        overflow-x: hidden;
         color: white;
     }
 
-    /* Tạo hiệu ứng sao lấp lánh nhẹ phía sau */
+    /* Phủ một lớp sao lấp lánh */
     .stApp::before {
         content: "";
         position: absolute;
         top: 0; left: 0; width: 100%; height: 100%;
         background: transparent url('https://www.transparenttextures.com/patterns/stardust.png') repeat;
-        opacity: 0.5;
+        opacity: 0.4;
         pointer-events: none;
     }
 
-    /* Thẻ Glassmorphism (Hiệu ứng kính mờ xịn xò) */
+    /* Thẻ Glassmorphism chứa toàn bộ nội dung (bao gồm cả nút) */
     .glass-card {
-        background: rgba(255, 255, 255, 0.05);
-        backdrop-filter: blur(15px);
-        -webkit-backdrop-filter: blur(15px);
-        border-radius: 20px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        padding: 40px;
+        background: rgba(255, 255, 255, 0.03);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border-radius: 24px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 35px;
         text-align: center;
-        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.6);
-        margin: auto;
-        max-width: 500px;
-        animation: slideUp 1s ease-out;
+        box-shadow: 0 15px 35px rgba(0, 0, 0, 0.7);
+        margin: 30px auto;
+        max-width: 480px;
+        animation: slideUp 1s cubic-bezier(0.19, 1, 0.22, 1);
     }
 
-    /* Định dạng và màu sắc chữ tiêu đề chuyển sắc (Gradient) */
+    /* Chữ tiêu đề Gradient ánh kim vũ trụ */
     .title-text {
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        background: linear-gradient(to right, #a18cd1 0%, #fbc2eb 100%);
+        font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        background: linear-gradient(135deg, #fad0c4 0%, #ffd1ff 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        font-weight: bold;
-        font-size: 2rem;
-        margin-bottom: 20px;
+        font-weight: 800;
+        font-size: 2.2rem;
+        margin-bottom: 15px;
+        letter-spacing: -0.5px;
     }
 
     .sub-text {
         font-size: 1.1rem;
         color: #e0e0e0;
         line-height: 1.6;
+        margin-bottom: 10px;
     }
 
-    /* Hiệu ứng hộp quà bay lơ lửng */
+    /* Định dạng ảnh hộp quà bay lơ lửng ma mị */
     .gift-img {
-        width: 200px;
-        margin: 20px auto;
-        filter: drop-shadow(0 0 15px rgba(161, 140, 209, 0.8));
+        width: 180px;
+        height: 180px;
+        object-fit: contain;
+        margin: 15px auto;
+        filter: drop-shadow(0 0 20px rgba(255, 209, 255, 0.6));
         animation: float 3s ease-in-out infinite;
     }
     
-    /* Hiệu ứng đóa hoa xuất hiện bung nở */
+    /* Định dạng đóa hoa chui ra từ hộp quà bùng nổ */
     .flower-img {
-        width: 280px;
-        border-radius: 15px;
-        filter: drop-shadow(0 0 20px rgba(251, 194, 235, 0.9));
-        animation: bloom 1.5s ease-out;
+        width: 220px;
+        height: 220px;
+        object-fit: contain;
+        margin: 15px auto;
+        filter: drop-shadow(0 0 25px rgba(250, 208, 196, 0.8));
+        animation: popAndBloom 1.2s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
     }
 
-    /* Các kịch bản chuyển động Animation */
+    /* --- Hệ thống Animation chuyển động mượt mà --- */
     @keyframes float {
-        0%, 100% { transform: translateY(0px); }
-        50% { transform: translateY(-20px); }
+        0%, 100% { transform: translateY(0px) rotate(0deg); }
+        50% { transform: translateY(-15px) rotate(3deg); }
     }
 
     @keyframes slideUp {
-        from { opacity: 0; transform: translateY(50px); }
+        from { opacity: 0; transform: translateY(40px); }
         to { opacity: 1; transform: translateY(0); }
     }
 
-    @keyframes bloom {
-        from { transform: scale(0.5); opacity: 0; }
-        to { transform: scale(1); opacity: 1; }
+    @keyframes popAndBloom {
+        0% { transform: scale(0) translateY(50px); opacity: 0; }
+        60% { transform: scale(1.1) translateY(-10px); opacity: 1; }
+        100% { transform: scale(1) translateY(0); }
     }
 
-    /* Tối ưu hiển thị Responsive mượt mà trên Điện thoại di động */
-    @media (max-width: 640px) {
-        .glass-card { padding: 25px; margin: 10px; }
-        .title-text { font-size: 1.6rem; }
-        .gift-img { width: 160px; }
-        .flower-img { width: 220px; }
+    /* Tối ưu Responsive tuyệt đối cho thiết bị di động nhỏ */
+    @media (max-width: 480px) {
+        .glass-card { padding: 20px; margin: 15px; }
+        .title-text { font-size: 1.7rem; }
+        .sub-text { font-size: 1rem; }
+        .gift-img { width: 140px; height: 140px; }
+        .flower-img { width: 180px; height: 180px; }
     }
     
-    /* Làm đẹp lại các nút bấm mặc định của Streamlit */
+    /* Thiết kế lại nút bấm Streamlit lồng bên trong thẻ kính */
     div.stButton > button {
-        background: linear-gradient(45deg, #6a11cb 0%, #2575fc 100%);
-        color: white;
+        background: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);
+        color: #111 !important;
         border: none;
-        padding: 12px 25px;
+        padding: 12px 20px;
         border-radius: 50px;
-        transition: 0.3s ease;
+        transition: all 0.3s ease;
         font-weight: bold;
+        font-size: 1rem;
         width: 100%;
-        margin-top: 15px;
+        margin-top: 20px;
+        box-shadow: 0 4px 15px rgba(251, 194, 235, 0.4);
     }
     div.stButton > button:hover {
-        transform: scale(1.03);
-        box-shadow: 0 0 20px rgba(37, 117, 252, 0.5);
-        color: white;
-    }
-    div.stButton > button:active {
-        color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(251, 194, 235, 0.7);
+        color: #000 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -136,55 +143,59 @@ if "user_name" not in st.session_state:
     st.session_state.user_name = ""
 
 # --- 5. ĐIỀU HƯỚNG GIAO DIỆN ---
-st.write("##")  # Tạo một khoảng cách nhỏ đầu trang cho cân đối
+st.write("##") 
 
-# BƯỚC 1: Form nhập tên
+# BƯỚC 1: Nhập tên
 if st.session_state.step == 1:
     st.markdown("""
     <div class="glass-card">
-        <div class="title-text">Gửi Tới Tương Lai...</div>
-        <p class="sub-text">Có một tín hiệu từ vũ trụ đang kết nối với bạn. Hãy cho chúng tôi biết tên bạn?</p>
-    </div>
+        <div class="title-text">Tín Hiệu Vũ Trụ...</div>
+        <p class="sub-text">Có một món quà từ vì sao đang tìm kiếm chủ nhân của nó. Cho hỏi tên bạn là gì?</p>
     """, unsafe_allow_html=True)
     
     name = st.text_input("", placeholder="Nhập tên của bạn vào đây...", key="name_input")
     
-    if st.button("Nhận tín hiệu ✨"):
+    if st.button("Kết nối tín hiệu ✨", use_container_width=True):
         if name.strip():
             st.session_state.user_name = name.strip()
             st.session_state.step = 2
             st.rerun()
         else:
             st.warning("Vui lòng nhập tên trước khi nhận tín hiệu nhé!")
+            
+    st.markdown("</div>", unsafe_allow_html=True)
 
-# BƯỚC 2: Hiển thị hộp quà lơ lửng
+# BƯỚC 2: Hộp quà lơ lửng chờ mở
 elif st.session_state.step == 2:
     st.markdown(f"""
     <div class="glass-card">
         <div class="title-text">Xin chào, {st.session_state.user_name}!</div>
         <p class="sub-text">Giữa ngân hà bao la rộng lớn, nhà phát triển có một món quà nhỏ muốn gửi tặng riêng cho bạn.</p>
         <img src="{LINK_ANH_HOP_QUA}" class="gift-img">
-    </div>
     """, unsafe_allow_html=True)
     
-    if st.button("Mở món quà từ vì sao 🎁"):
+    # Nút bấm đã được lồng ghép chuẩn chỉnh vào trong khối DIV kính mờ
+    if st.button("Mở món quà từ vì sao 🎁", use_container_width=True):
         st.session_state.step = 3
         st.rerun()
+        
+    st.markdown("</div>", unsafe_allow_html=True)
 
-# BƯỚC 3: Mở quà và hiện đóa hoa bung nở
+# BƯỚC 3: Hộp quà biến mất, hoa bay vút lên nở rộ
 elif st.session_state.step == 3:
     st.markdown(f"""
     <div class="glass-card">
         <div class="title-text">Dành Cho {st.session_state.user_name}</div>
-        <p class="sub-text">Chúc bạn luôn luôn rạng rỡ, hạnh phúc và tỏa sáng như những vì tinh tú trên bầu trời!</p>
+        <p class="sub-text">Chúc bạn luôn rạng rỡ, hạnh phúc và tỏa sáng rực rỡ như những vì tinh tú!</p>
         <img src="{LINK_ANH_DOA_HOA}" class="flower-img">
-        <p style="margin-top: 25px; font-style: italic; color: #fbc2eb; font-size: 0.9rem;">--- From Developer with Love ---</p>
-    </div>
+        <p style="margin-top: 20px; font-style: italic; color: #ffd1ff; font-size: 0.85rem; opacity: 0.8;">--- From Developer with Love ---</p>
     """, unsafe_allow_html=True)
     
-    st.balloons()  # Thả bong bóng chúc mừng sinh động
+    st.balloons() # Hiệu ứng bóng bay phụ họa thêm sinh động
     
-    if st.button("Quay lại vũ trụ 🔄"):
+    if st.button("Quay lại vũ trụ 🔄", use_container_width=True):
         st.session_state.step = 1
         st.session_state.user_name = ""
         st.rerun()
+        
+    st.markdown("</div>", unsafe_allow_html=True)
