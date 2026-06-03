@@ -3,287 +3,227 @@ import time
 import random
 from datetime import datetime
 
-# 1. Cấu hình trang web (Bắt buộc đặt ở đầu)
+# 1. Thiết lập cấu hình chuẩn Web Application
 st.set_page_config(
-    page_title="CozyStudy - Góc Học Tập Nhỏ 🌸",
-    page_icon="🌸",
+    page_title="Aesthetic Workspace — Tối Giản & Hiệu Suất",
+    page_icon="🕊️",
     layout="wide",
-    initial_sidebar_state="collapsed" # Tự động thu gọn sidebar trên điện thoại cho gọn gọn
+    initial_sidebar_state="collapsed"
 )
 
-# 2. Khởi tạo dữ liệu Session State
+# 2. Khởi tạo Session State cho các tính năng nâng cao
 if 'todos' not in st.session_state:
     st.session_state.todos = []
 if 'journal' not in st.session_state:
     st.session_state.journal = []
+if 'brain_dump' not in st.session_state:
+    st.session_state.brain_dump = ""
+if 'energy_log' not in st.session_state:
+    st.session_state.energy_log = []
 if 'xp' not in st.session_state:
     st.session_state.xp = 0
 
-# Hệ thống cấp độ dễ thương dành cho phái nữ
-def get_level_title(xp):
-    lvl = (xp // 50) + 1
-    if lvl == 1: return "🌱 Mầm Nhỏ Chăm Chỉ"
-    elif lvl == 2: return "🌿 Lá Xanh Tự Tin"
-    elif lvl == 3: return "🌸 Hoa Thắm Trưởng Thành"
-    else: return "👑 Nữ Hoàng Kỷ Luật"
-
-user_level = (st.session_state.xp // 50) + 1
-xp_next_level = 50 - (st.session_state.xp % 50)
-level_title = get_level_title(st.session_state.xp)
-
-# 3. Tùy biến CSS giao diện Pastel Pink mềm mại, tối ưu cho Mobile
+# 3. Inject CSS để tùy biến giao diện thành một Premium Minimalist Website
 st.markdown("""
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
     <style>
-    /* Nền kem sữa ấm áp */
+    /* Reset & Toàn bộ font chữ hệ thống */
+    * {
+        font-family: 'Plus Jakarta Sans', sans-serif;
+    }
     .stApp {
-        background-color: #FFFDF9;
+        background-color: #FAF8F5; /* Màu nền kem Minimalist */
+        color: #2D2D2D;
     }
     
-    /* Banner chính bo góc mềm, màu hồng pastel gradient */
-    .cozy-banner {
-        background: linear-gradient(135deg, #FFB7B2 0%, #FFDAC1 100%);
-        color: #4A4A4A;
-        padding: 1.8rem;
-        border-radius: 20px;
-        box-shadow: 0 8px 20px rgba(255, 183, 178, 0.2);
-        margin-bottom: 1.5rem;
-        text-align: center;
+    /* Thiết kế Header Website */
+    .web-header {
+        padding: 2rem 0 1rem 0;
+        border-bottom: 1px solid #EAE5DC;
+        margin-bottom: 2rem;
+    }
+    .web-logo {
+        font-size: 1.8rem;
+        font-weight: 700;
+        letter-spacing: -0.5px;
+        color: #1A1A1A;
+    }
+    .web-subtitle {
+        font-size: 0.95rem;
+        color: #7A756B;
+        margin-top: 0.2rem;
     }
     
-    /* Thẻ tính năng bo tròn, viền hồng nhạt */
-    .cozy-card {
-        background: white;
-        padding: 1.2rem;
-        border-radius: 16px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);
-        border: 1px solid #FFEBEB;
+    /* Thẻ Container cao cấp (Bento Grid Layout) */
+    .card-premium {
+        background: #FFFFFF;
+        padding: 1.5rem;
+        border-radius: 14px;
+        border: 1px solid #EFEBE4;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.015);
+        margin-bottom: 1.2rem;
+        transition: all 0.3s ease;
+    }
+    .card-premium:hover {
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.03);
+        border-color: #DFDAD0;
+    }
+    
+    /* Định dạng Typography các thẻ tiêu đề */
+    .section-title {
+        font-size: 1.15rem;
+        font-weight: 600;
+        color: #1A1A1A;
         margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
     }
     
-    /* Badge hiển thị danh hiệu */
-    .girl-badge {
-        background: #FF7B94;
-        color: white;
-        padding: 0.4rem 1rem;
-        border-radius: 50px;
-        font-weight: bold;
-        font-size: 0.85rem;
-        display: inline-block;
-        margin-bottom: 0.5rem;
-    }
-    
-    /* Tiêu đề chính tối ưu kích thước không bị tràn màn hình điện thoại */
-    .main-title {
+    /* Nhãn tiến trình tối giản */
+    .metric-num {
         font-size: 2.2rem;
-        font-weight: 800;
-        background: linear-gradient(to right, #FF7B94, #FFAAA6);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 0px;
+        font-weight: 700;
+        color: #2D2D2D;
+        line-height: 1;
+    }
+    .metric-label {
+        font-size: 0.85rem;
+        color: #8A8477;
+        margin-top: 0.4rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
     }
     
-    /* Tinh chỉnh khoảng cách hiển thị tab trên mobile */
-    .stTabs [data-baseweb="tab"] {
-        padding-left: 8px;
-        padding-right: 8px;
-        font-size: 0.9rem;
+    /* Custom thanh Tabs giống thanh điều hướng website thực tế */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 12px;
+        background-color: transparent;
+        border-bottom: 1px solid #EAE5DC;
+        padding-bottom: 8px;
     }
+    .stTabs [data-baseweb="tab"] {
+        height: 38px;
+        white-space: pre;
+        background-color: transparent;
+        border-radius: 6px;
+        color: #7A756B;
+        font-weight: 500;
+        font-size: 0.95rem;
+        padding: 0 16px;
+    }
+    .stTabs [data-baseweb="tab"]:hover {
+        color: #1A1A1A;
+        background-color: #F1ECE3;
+    }
+    .stTabs [data-baseweb="tab"][aria-selected="true"] {
+        background-color: #1A1A1A !important;
+        color: #FFFFFF !important;
+    }
+    
+    /* Huy hiệu phân loại công việc */
+    .badge-high { background: #FCE8E6; color: #A8201A; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .badge-medium { background: #FEF3D6; color: #8F6B00; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .badge-low { background: #E6F4EA; color: #137333; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
     </style>
 """, unsafe_allow_html=True)
 
-# Danh sách lời nhắn nhủ ngọt ngào, tạo động lực
-QUOTES = [
-    {"text": "Cứ đi từng bước nhỏ một thôi cô gái nhé, bông hoa đẹp luôn cần thời gian để nở rộ.", "author": "Lời nhắn từ tương lai"},
-    {"text": "Học tập không phải là gánh nặng, đó là cách em tự tô màu cho ước mơ của chính mình.", "author": "Góc bình yên"},
-    {"text": "Hôm nay em đã rất cố gắng rồi. Hãy mỉm cười và tiếp tục tiến lên nào!", "author": "Trái tim ấm áp"},
-    {"text": "Đừng so sánh chương 1 của mình với chương 20 của người khác. Hãy tập trung vào phiên bản tốt hơn của em.", "author": "Keep Growing"},
-    {"text": "Một chút chăm chỉ mỗi ngày sẽ tích tiểu thành đại thành một tương lai rực rỡ.", "author": "Cố lên nhé"}
-]
+# 4. Web App Header Layout
+st.markdown("""
+    <div class="web-header">
+        <div class="web-logo">STUDIO WORKSPACE</div>
+        <div class="web-subtitle">Hệ thống quản trị mục tiêu và tối ưu hóa không gian tập trung cá nhân.</div>
+    </div>
+""", unsafe_allow_html=True)
 
-# 4. Khu vực thông tin cá nhân (Sidebar gọn gàng)
-with st.sidebar:
-    st.markdown("### 🎀 Góc Nhỏ Của Em")
-    st.markdown(f"<span class='girl-badge'>{level_title}</span>", unsafe_allow_html=True)
-    st.write(f"**Điểm chăm chỉ (XP):** {st.session_state.xp} pts")
-    
-    # Tiến trình thăng cấp
-    progress_val = (st.session_state.xp % 50) / 50
-    st.progress(progress_val)
-    st.caption(f"Còn **{xp_next_level} XP** nữa để nâng mầm cây học tập!")
-    
-    st.markdown("---")
-    st.markdown("### 🎵 Nhạc Lofi Học Tập")
-    st.caption("Bật một chút giai điệu nhẹ nhàng để thư giãn não bộ:")
-    # Nhúng danh sách phát lofi phong cách cottagecore/cute vô cùng hợp chủ đề
-    st.video("https://www.youtube.com/watch?v=jfKfPfyJRdk")
-
-# Giao diện chính trên Web / Điện thoại
-st.markdown("<h1 class='main-title'>CozyStudy 🌸</h1>", unsafe_allow_html=True)
-st.markdown("<p style='color: #8A8A8A; font-size: 0.95rem; margin-bottom: 1rem;'>Nơi tưới tắm cho mầm mống tri thức và nuôi dưỡng sự kiên trì của em.</p>", unsafe_allow_html=True)
-
-# 5. Hệ thống Tabs điều hướng (Thân thiện với màn hình cảm ứng di động)
-tab1, tab2, tab3, tab4 = st.tabs([
-    "🏠 Trang Chủ", 
-    "⏱️ Pomodoro", 
-    "🎯 Việc Nhỏ", 
-    "🏆 Khen Mình"
+# Khởi tạo thanh điều hướng Tab cao cấp
+tab_dashboard, tab_focus, tab_planner, tab_workspace = st.tabs([
+    "📊 Bảng điều khiển", 
+    "⏱️ Không gian Pomodoro", 
+    "🎯 Trình quản lý mục tiêu", 
+    "✍️ Góc nháp & Lưu trữ"
 ])
 
 # ==========================================
-# TAB 1: TRANG CHỦ & ĐỘNG LỰC
+# TAB 1: BẢNG ĐIỀU KHIỂN & ĐỘNG LỰC TRƯỞNG THÀNH
 # ==========================================
-with tab1:
-    random_quote = random.choice(QUOTES)
-    st.markdown(f"""
-        <div class='cozy-banner'>
-            <h2 style='color: #4A4A4A; font-style: italic; font-size: 1.3rem; font-weight: 600; line-height: 1.5;'>"{random_quote['text']}"</h2>
-            <p style='color: #FF7B94; margin-top: 0.8rem; font-weight: bold; font-size: 0.9rem;'>— {random_quote['author']} —</p>
-        </div>
-    """, unsafe_allow_html=True)
+with tab_dashboard:
+    col_dash_left, col_dash_right = st.columns([7, 3])
     
-    st.markdown("<div class='cozy-card'>", unsafe_allow_html=True)
-    st.markdown("### 📊 Nhật Ký Chăm Chỉ Ngày Hôm Nay")
-    total_tasks = len(st.session_state.todos)
-    done_tasks = sum(1 for t in st.session_state.todos if t['done'])
-    
-    c1, c2 = st.columns(2)
-    c1.metric(label="Mục tiêu đề ra", value=total_tasks)
-    c2.metric(label="Đã làm xong", value=f"{done_tasks} việc")
-    
-    if total_tasks > 0:
-        rate = int(done_tasks / total_tasks * 100)
-        st.progress(rate / 100)
-        st.caption(f"Em đã hoàn thành xuất sắc **{rate}%** chặng đường rồi á!")
-    else:
-        st.info("Em chưa lên kế hoạch gì nè. Hãy chuyển sang tab 'Việc Nhỏ' để ghi ra vài việc nha!")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("<div class='cozy-card'>", unsafe_allow_html=True)
-    # HOÀN TOÀN KHÔNG DÙNG DẤU NGOẶC KÉP TRÙNG NHAU Ở ĐÂY ĐỂ TRÁNH LỖI SYNTAX
-    st.markdown("### ⚡ Chế độ nạp năng lượng")
-    st.write("Hôm nay em muốn đón nhận ngày mới với trạng thái tâm lý thế nào?")
-    
-    mindset = st.radio(
-        "Tâm trạng em chọn chọn:",
-        ["Nhẹ nhàng tập trung, tránh xa điện thoại 📱", 
-         "Không áp lực, học tới đâu vui tới đó 🧠", 
-         "Nỗ lực hết mình vì một phiên bản rực rỡ hơn ✨"]
-    )
-    if st.button("Kích hoạt tâm trạng tích cực", use_container_width=True):
-        st.balloons()
-        st.success("Tâm trạng ngọt ngào đã được nạp vào ngày mới của em!")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# ==========================================
-# TAB 2: ĐỒNG HỒ POMODORO
-# ==========================================
-with tab2:
-    st.markdown("<div class='cozy-card'>", unsafe_allow_html=True)
-    st.markdown("### ⏱️ Đồng Hồ Cà Chua Tập Trung")
-    st.write("Em hãy chọn thời gian, sau đó úp điện thoại xuống và tập trung nhé.")
-    
-    duration_type = st.selectbox("Chọn mốc thời gian nghỉ/học:", ["Tập trung cao độ (25 phút)", "Nghỉ ngơi ngắn (5 phút)", "Nghỉ ngơi dài (15 phút)"])
-    duration_minutes = 25 if "Tập trung" in duration_type else (5 if "ngắn" in duration_type else 15)
-    
-    start_btn = st.button("🎀 Bắt đầu đếm giờ", use_container_width=True, type="primary")
-    
-    timer_placeholder = st.empty()
-    timer_placeholder.markdown(f"<h1 style='text-align: center; font-size: 4rem; color: #FF7B94; font-family: monospace;'>{duration_minutes:02d}:00</h1>", unsafe_allow_html=True)
-    
-    if start_btn:
-        total_seconds = duration_minutes * 60
-        progress_bar = st.progress(0)
-        
-        for remaining in range(total_seconds, -1, -1):
-            mins, secs = divmod(remaining, 60)
-            timer_placeholder.markdown(f"<h1 style='text-align: center; font-size: 4rem; color: #FF4B4B; font-family: monospace;'>{mins:02d}:{secs:02d}</h1>", unsafe_allow_html=True)
-            
-            progress = (total_seconds - remaining) / total_seconds
-            progress_bar.progress(progress)
-            time.sleep(1)
-            
-        if "Tập trung" in duration_type:
-            st.session_state.xp += 25
-            st.success("🎉 Siêu quá đi! Em đã hoàn thành trọn vẹn và nhận được +25 điểm chăm chỉ!")
-        else:
-            st.success("☕ Hết giờ thư giãn rồi, cùng quay lại học tập thôi nào.")
-        st.snow()
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# ==========================================
-# TAB 3: VIỆC CẦN LÀM (TO-DO LIST)
-# ==========================================
-with tab3:
-    st.markdown("### 🎯 Danh sách việc nhỏ cần làm")
-    st.caption("Chia nhỏ bài học giúp em đỡ ngợp hơn đó. Làm xong mỗi việc được nhận ngay +10 XP.")
-    
-    with st.form("todo_form", clear_on_submit=True):
-        new_task = st.text_input("Ghi việc cần làm (Ví dụ: Chép 10 từ vựng, Đọc xong chương 2 lý,...)")
-        submit_task = st.form_submit_button("Thêm vào danh sách")
-        
-        if submit_task and new_task:
-            st.session_state.todos.append({"task": new_task, "done": False, "claimed": False})
-            st.rerun()
-
-    if st.session_state.todos:
-        for idx, item in enumerate(st.session_state.todos):
-            st.markdown("<div class='cozy-card'>", unsafe_allow_html=True)
-            
-            # Tối ưu hóa To-do cho Mobile bằng cách gom Checkbox và Text chung một dòng, nút Xóa nằm gọn bên phải
-            col_left, col_right = st.columns([8, 2])
-            
-            is_done = col_left.checkbox(item["task"], value=item["done"], key=f"check_{idx}")
-            if is_done != item["done"]:
-                st.session_state.todos[idx]["done"] = is_done
-                if is_done and not item.get("claimed", False):
-                    st.session_state.xp += 10
-                    st.session_state.todos[idx]["claimed"] = True
-                    st.toast("⚡ Thưởng +10 XP chăm chỉ đã nạp!")
-                st.rerun()
-                
-            if item["done"]:
-                col_left.caption("✨ *Tuyệt vời! Đã hoàn thành*")
-                
-            if col_right.button("🗑️", key=f"del_{idx}"):
-                if item.get("claimed", False):
-                    st.session_state.xp -= 10
-                st.session_state.todos.pop(idx)
-                st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
-    else:
-        st.info("Hôm nay chưa có việc gì cần làm hết á. Thêm một vài việc nhỏ đi em!")
-
-# ==========================================
-# TAB 4: NHẬT KÝ KHEN MÌNH (Đã sửa lỗi Tab thụt lề)
-# ==========================================
-with tab4:
-    st.markdown("### 🏆 Nhật Ký Tự Hào Của Bản Thân")
-    st.caption("Hãy viết lại những việc em thấy mình làm tốt hôm nay nhé. Học cách yêu thương và công nhận chính mình nha.")
-    
-    with st.form("journal_form", clear_on_submit=True):
-        achievement = st.text_area("Hôm nay em tự hào nhất về điều gì ở bản thân mình?")
-        submit_journal = st.form_submit_button("Ghi lại dấu ấn")
-        
-        if submit_journal and achievement:
-            now = datetime.now().strftime("%d/%m/%Y - %H:%M")
-            st.session_state.journal.insert(0, {"time": now, "content": achievement})
-            st.session_state.xp += 5
-            st.toast("🏆 Đã lưu vào cuốn sổ nhỏ! +5 XP.")
-            st.rerun()
-            
-    # ĐÃ ĐƯỢC ĐẶT CHÍNH XÁC BÊN TRONG KHỐI 'WITH TAB4' - SỬA LỖI INDENTATION CŨ
-    if st.session_state.journal:
-        st.write("---")
-        for item in st.session_state.journal:
-            st.markdown(f"""
-                <div class='cozy-card' style='border-left: 4px solid #FF7B94;'>
-                    <span style='color: #A3A3A3; font-size: 0.8rem;'>⏱️ Lúc: {item['time']}</span>
-                    <p style='margin-top: 0.4rem; font-size: 1rem; color: #4A4A4A; font-weight: 500;'>🌸 {item['content']}</p>
+    with col_dash_left:
+        # Lời đề tựa tối giản thay thế các câu nói sến súa cũ
+        st.markdown(f"""
+            <div class="card-premium" style="background: linear-gradient(135deg, #FDFBF7 0%, #F5EFEB 100%); border-left: 4px solid #C4A484;">
+                <div style="font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; color: #A09485; font-weight: 600;">Ý niệm hôm nay</div>
+                <div style="font-size: 1.25rem; font-weight: 500; color: #2D2D2D; margin-top: 0.6rem; line-height: 1.6; font-style: italic;">
+                    "Sự tập trung sâu sắc là nghệ thuật loại bỏ những điều thừa thãi. Hãy hoàn thành tốt một việc nhỏ trước khi nghĩ tới những điều lớn lao."
                 </div>
-            """, unsafe_allow_html=True)
-    else:
-        st.info("Chưa có dòng nhật ký nào hết nè. Hãy viết một dòng để tự khen thưởng bản thân nha!")
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Grid thống kê hiệu suất dạng số tối giản
+        st.markdown('<div class="section-title">📉 Chỉ số tiến độ cá nhân</div>', unsafe_allow_html=True)
+        total_tasks = len(st.session_state.todos)
+        done_tasks = sum(1 for t in st.session_state.todos if t['done'])
+        
+        m_col1, m_col2, m_col3 = st.columns(3)
+        with m_col1:
+            st.markdown(f'<div class="card-premium"><div class="metric-num">{total_tasks}</div><div class="metric-label">Tổng mục tiêu</div></div>', unsafe_allow_html=True)
+        with m_col2:
+            st.markdown(f'<div class="card-premium"><div class="metric-num">{done_tasks}</div><div class="metric-label">Đã xử lý</div></div>', unsafe_allow_html=True)
+        with m_col3:
+            rate = int(done_tasks / total_tasks * 100) if total_tasks > 0 else 0
+            st.markdown(f'<div class="card-premium"><div class="metric-num">{rate}%</div><div class="metric-label">Tỷ lệ hoàn thành</div></div>', unsafe_allow_html=True)
+            
+        if total_tasks > 0:
+            st.progress(rate / 100)
+        else:
+            st.info("Hệ thống chưa ghi nhận kế hoạch nào cho ngày hôm nay. Vui lòng chuyển sang tab 'Trình quản lý mục tiêu'.")
 
-# Chân trang nhẹ nhàng
-st.markdown("<br>---", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #B5B5B5; font-size: 0.85rem;'>CozyStudy Pro © 2026 | Thương gửi những cô gái đang kiên trì vì ước mơ của mình.</p>", unsafe_allow_html=True)
+    with col_dash_right:
+        # Tính năng mới: Mood & Energy Tracker (Phân tích năng lượng làm việc)
+        st.markdown('<div class="card-premium">', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">🔋 Trạng thái năng lượng</div>', unsafe_allow_html=True)
+        energy_level = st.slider("Mức độ sẵn sàng làm việc của não bộ:", 0, 100, 80, help="Kéo thanh để tự đánh giá năng lượng hiện tại của bạn.")
+        
+        if st.button("Lưu trạng thái hôm nay", use_container_width=True):
+            st.session_state.energy_log.append({"time": datetime.now().strftime("%H:%M"), "level": energy_level})
+            st.toast("Đã ghi nhận chỉ số sinh học vào hệ thống.")
+            
+        if st.session_state.energy_log:
+            st.caption("Nhật ký năng lượng gần nhất:")
+            for log in st.session_state.energy_log[-2:]:
+                st.markdown(f"⏱️ **{log['time']}** — Sức bền đạt **{log['level']}%**")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Trình phát âm thanh nền nhúng tối giản (Sử dụng playlist lofi không lời cao cấp)
+        st.markdown('<div class="card-premium">', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">🎧 Không gian âm thanh</div>', unsafe_allow_html=True)
+        st.caption("Âm thanh sóng não giúp duy trì trạng thái tập trung sâu (Deep Work):")
+        st.video("https://www.youtube.com/watch?v=jfKfPfyJRdk")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# ==========================================
+# TAB 2: ĐỒNG HỒ POMODORO ĐỊNH VỊ CÔNG VIỆC
+# ==========================================
+with tab_focus:
+    st.markdown('<div class="card-premium">', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">⏱️ Chu kỳ tập trung Pomodoro</div>', unsafe_allow_html=True)
+    
+    f_col1, f_col2 = st.columns([4, 6])
+    
+    with f_col1:
+        # Tính năng kết nối Pomodoro trực tiếp với danh sách việc cần làm thực tế
+        undone_tasks = [t["task"] for t in st.session_state.todos if not t["done"]]
+        if undone_tasks:
+            target_task = st.selectbox("Chọn mục tiêu đang thực hiện trong phiên này:", undone_tasks)
+        else:
+            target_task = st.selectbox("Chọn mục tiêu đang thực hiện trong phiên này:", ["Học tập tự do / Nghiên cứu tài liệu"])
+            
+        focus_type = st.radio("Cấu hình phiên:", ["Phiên làm việc (25 phút)", "Nghỉ ngắn (5 phút)", "Nghỉ dài (15 phút)"])
+        duration = 25 if "25" in focus_type else (5 if "5" in focus_type else 15)
+        
+        btn_start = st.button("Kích hoạt phiên đếm ngược", use_container_width=True, type="primary
