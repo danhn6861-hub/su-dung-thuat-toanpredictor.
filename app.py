@@ -175,7 +175,7 @@ elif st.session_state.step == 2:
     """, unsafe_allow_html=True)
     
     # Nút bấm đã được lồng ghép chuẩn chỉnh vào trong khối DIV kính mờ
-    if st.button("Mở món quà từ vì sao 🎁", use_container_width=True):
+    if st.button("Mở món quà 🎁", use_container_width=True):
         st.session_state.step = 3
         st.rerun()
         
@@ -186,7 +186,7 @@ elif st.session_state.step == 3:
     st.markdown(f"""
     <div class="glass-card">
         <div class="title-text">Dành Cho {st.session_state.user_name}</div>
-        <p class="sub-text">Chúc bạn luôn rạng rỡ, hạnh phúc và tỏa sáng rực rỡ như những vì tinh tú!</p>
+        <p class="sub-text">Học cho giỏi đi</p>
         <img src="{LINK_ANH_DOA_HOA}" class="flower-img">
         <p style="margin-top: 20px; font-style: italic; color: #ffd1ff; font-size: 0.85rem; opacity: 0.8;">--- From Developer with Love ---</p>
     """, unsafe_allow_html=True)
