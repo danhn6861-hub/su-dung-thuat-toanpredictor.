@@ -11,8 +11,8 @@ st.set_page_config(
 # --- 2. KHU VỰC THAY ĐỔI LINK ẢNH (ĐÃ THAY BẰNG CODELINK TRONG SUỐT 100%) ---
 # Mẹo: Các link dưới đây lấy từ Giphy Sticker nên đảm bảo xóa phông hoàn toàn.
 # Nếu muốn tự thay, hãy lên giphy.com/stickers (phải chọn mục STICKERS thì nền mới trong suốt).
-LINK_ANH_HOP_QUA = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExM3Z0NTA4YnFwYmN4Yms3YnY0NTA2bms0Ym15NDFpYmVidG4xdTFvcyZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/vX79B48fKgnW9YosvO/giphy.gif" 
-LINK_ANH_DOA_HOA = "https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExbW90YzAwbnd6ZHp4N2pndjZ6YTJ5YXBwYmZ4MXB5M29tN3k0ZXFxeSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9cw/8g759bSgK9AOkbYvL9/giphy.gif"
+LINK_ANH_HOP_QUA = "https://i.pinimg.com/1200x/97/fe/ba/97febae1f41c449f3e08284f1ea9f25b.jpg" 
+LINK_ANH_DOA_HOA = "https://i.pinimg.com/736x/6f/0e/5f/6f0e5f13b254771aa399e660ee34e3a1.jpg"
 
 # --- 3. CSS CUSTOM: VŨ TRỤ & GLASSMORPHISM ---
 st.markdown("""
