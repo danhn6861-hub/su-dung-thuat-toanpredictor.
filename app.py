@@ -10,7 +10,7 @@ st.set_page_config(
 
 # --- 2. KHU VỰC THAY ĐỔI LINK ẢNH ---
 # Bạn có thể tự do thay đổi hai link ảnh/GIF dưới này theo ý muốn nhé!
-LINK_ANH_HOP_QUA = "https://cdn.pixabay.com/animation/2023/03/19/02/45/02-45-42-263_512.gif" 
+LINK_ANH_HOP_QUA = "https://i.pinimg.com/736x/3f/49/93/3f4993bff0712b5bc855e6ecb77d3dd9.jpg" 
 LINK_ANH_DOA_HOA = "https://i.pinimg.com/originals/91/97/8e/91978e87493a595ec7695325785a9df4.gif"
 
 # --- 3. CSS CUSTOM: VŨ TRỤ & GLASSMORPHISM ---
