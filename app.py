@@ -188,7 +188,7 @@ elif st.session_state.step == 3:
         <div class="title-text">Dành Cho {st.session_state.user_name}</div>
         <p class="sub-text">Học cho giỏi đi</p>
         <img src="{LINK_ANH_DOA_HOA}" class="flower-img">
-        <p style="margin-top: 20px; font-style: italic; color: #ffd1ff; font-size: 0.85rem; opacity: 0.8;">--- From Developer with Love ---</p>
+        <p style="margin-top: 20px; font-style: italic; color: #ffd1ff; font-size: 0.85rem; opacity: 0.8;">--- Từ Nhà Phát Triển ---</p>
     """, unsafe_allow_html=True)
     
     st.balloons() # Hiệu ứng bóng bay phụ họa thêm sinh động
