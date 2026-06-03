@@ -2,7 +2,7 @@ import streamlit as st
 
 # --- 1. CẤU HÌNH TRANG ---
 st.set_page_config(
-    page_title="Quà Tặng Từ Vũ Trụ",
+    page_title="Quà Tặng ",
     page_icon="🌌",
     layout="centered",
     initial_sidebar_state="collapsed"
